@@ -35,17 +35,23 @@
   var cstr = null; // 各セルの色の強さ (0..)
   var COLOR_DECAY = 0.975; // 毎フレームの色の減衰（約1.5〜2秒で水色に戻る）
 
-  // ---- 波紋リズム（タップでハマると共鳴する、やさしい遊び）----
+  // ---- 光をあつめる遊び（指についてくる光を、集めて咲かせる）----
+  var motes = []; // 集められる光の粒
+  var blooms = []; // 咲いた光の花
+  var pulse = 0, // 開花時の全体のやわらかな光
+    pulseX = 0,
+    pulseY = 0;
+  var lastBloom = 0, // 連続開花のクールダウン用
+    lastNote = 0; // なぞり音のスロットリング用
+  var GATHER_NEED = 4; // この数だけ指元に集まると開花
+  var BLOOM_R = 54; // 指元のこの半径に集まったら開花
+  var firstBloom = false; // チュートリアル進行用
+
+  // ---- 音 ----
   var actx = null,
     master = null,
     muted = false;
-  var lastTap = 0, // 直近タップ時刻
-    beatIv = 0, // 直近のタップ間隔（テンポ）
-    resonance = 0, // 共鳴レベル（リズムが続くほど上がる）
-    beatX = 0,
-    beatY = 0,
-    pulse = 0; // オンビート時の全体のきらめき
-  // ペンタトニック音階の周波数（どう叩いても濁らない＝瞑想的）
+  // ペンタトニック音階の周波数（どの音も濁らない＝瞑想的）
   var PENTA = [];
   (function () {
     var base = 523.25; // C5
@@ -54,7 +60,6 @@
       PENTA.push(base * Math.pow(2, semis[i] / 12));
     }
   })();
-  var RES_MAX = PENTA.length - 1;
 
   // 色相→RGB のルックアップテーブル（毎フレームの三角関数計算を避けて軽量化）
   var HUE_LUT = new Float32Array(360 * 3);
@@ -218,8 +223,33 @@
   function seedParticles() {
     grains.length = 0;
     leaves.length = 0;
+    motes.length = 0;
     for (var i = 0; i < mode.grains; i++) grains.push(makeGrain());
     for (var j = 0; j < mode.leaves; j++) leaves.push(makeLeaf());
+    var nm = modeName === "sparkle" ? 16 : 12;
+    for (var k = 0; k < nm; k++) motes.push(makeMote(rand(0, W), rand(0, H)));
+  }
+
+  // 集められる光の粒（指に引かれて集まり、たまると咲く）
+  function makeMote(x, y) {
+    return {
+      x: x,
+      y: y,
+      vx: 0,
+      vy: 0,
+      r: rand(2, 3.2),
+      ph: rand(0, Math.PI * 2),
+      sp: rand(0.003, 0.006),
+    };
+  }
+
+  // 画面の縁から新しい光が流れ込む（開花で消えた分の補充）
+  function spawnEdgeMote() {
+    var side = Math.floor(rand(0, 4));
+    if (side === 0) return makeMote(rand(0, W), -12);
+    if (side === 1) return makeMote(rand(0, W), H + 12);
+    if (side === 2) return makeMote(-12, rand(0, H));
+    return makeMote(W + 12, rand(0, H));
   }
 
   function makeGrain() {
@@ -440,18 +470,18 @@
       ctx.stroke();
     }
 
-    // --- 共鳴の全体のきらめき（オンビートでふわっと光る）---
+    // --- 開花の全体のやわらかな光 ---
     if (pulse > 0.01) {
       var gp = ctx.createRadialGradient(
-        beatX,
-        beatY,
+        pulseX,
+        pulseY,
         0,
-        beatX,
-        beatY,
+        pulseX,
+        pulseY,
         Math.max(W, H) * 0.7
       );
-      gp.addColorStop(0, "rgba(255,255,255," + pulse * 0.12 + ")");
-      gp.addColorStop(1, "rgba(255,255,255,0)");
+      gp.addColorStop(0, "rgba(255,250,235," + pulse * 0.13 + ")");
+      gp.addColorStop(1, "rgba(255,250,235,0)");
       ctx.globalCompositeOperation = "lighter";
       ctx.fillStyle = gp;
       ctx.fillRect(0, 0, W, H);
@@ -459,24 +489,6 @@
       pulse *= 0.9;
     } else {
       pulse = 0;
-    }
-
-    // --- テンポのガイドリング（次の拍に向かって静かに広がる）---
-    if (resonance >= 2 && beatIv) {
-      var since = performance.now() - lastTap;
-      if (since < beatIv * 1.7) {
-        var bp = since / beatIv; // 0→1 で次の拍
-        if (bp <= 1) {
-          ctx.beginPath();
-          ctx.strokeStyle = "rgba(255,255,255," + 0.16 * bp + ")";
-          ctx.lineWidth = 1;
-          ctx.arc(beatX, beatY, 8 + bp * 46, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-      } else {
-        resonance = 0; // テンポが途切れた＝グルーヴ終了
-        beatIv = 0;
-      }
     }
 
     // --- 白い筋（速いなぞり） ---
@@ -533,6 +545,115 @@
       ctx.arc(gr.x, gr.y, gr.r, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    // --- 集められる光（指についてくる）と、開花 ---
+    var pl = [];
+    for (var id in pointers) pl.push(pointers[id]);
+
+    for (var mi = 0; mi < motes.length; mi++) {
+      var mt = motes[mi];
+      sampleSlope(mt.x, mt.y, slope); // 波でもゆれる
+      mt.vx += slope.x * 0.015 + fx * 0.01;
+      mt.vy += slope.y * 0.015 + fy * 0.01;
+      // 触れている指へスーッと引き寄せられる＝動かすほど光が集まってくる。
+      // 画面全体に効く弱い牽引。指の近くでは弱めて、そっと溜まる。
+      for (var pi = 0; pi < pl.length; pi++) {
+        var ax = pl[pi].x - mt.x;
+        var ay = pl[pi].y - mt.y;
+        var ad = Math.sqrt(ax * ax + ay * ay) + 0.001;
+        var acc = 0.5 * Math.min(1, ad / 40);
+        mt.vx += (ax / ad) * acc;
+        mt.vy += (ay / ad) * acc;
+      }
+      mt.vx *= 0.85;
+      mt.vy *= 0.85;
+      mt.x += mt.vx * dt * 0.08 + fx;
+      mt.y += mt.vy * dt * 0.08 + fy;
+      wrap(mt);
+      mt.ph += mt.sp * dt;
+      var mtw = 0.6 + 0.4 * Math.sin(mt.ph);
+      ctx.beginPath(); // やわらかな光暈
+      ctx.fillStyle = "rgba(255,242,198," + 0.16 * mtw + ")";
+      ctx.arc(mt.x, mt.y, mt.r * 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath(); // 芯
+      ctx.fillStyle = "rgba(255,252,236," + 0.92 * mtw + ")";
+      ctx.arc(mt.x, mt.y, mt.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 指元に GATHER_NEED 個あつまったら開花
+    var nowt = performance.now();
+    for (var qi = 0; qi < pl.length; qi++) {
+      var P = pl[qi];
+      var cnt = 0,
+        cx = 0,
+        cy = 0;
+      var hits = [];
+      for (var hj = 0; hj < motes.length; hj++) {
+        var hm = motes[hj];
+        var hdx = hm.x - P.x;
+        var hdy = hm.y - P.y;
+        if (hdx * hdx + hdy * hdy < BLOOM_R * BLOOM_R) {
+          cnt++;
+          cx += hm.x;
+          cy += hm.y;
+          hits.push(hj);
+        }
+      }
+      if (cnt >= GATHER_NEED && nowt - lastBloom > 280) {
+        lastBloom = nowt;
+        cx /= cnt;
+        cy /= cnt;
+        blooms.push({ x: cx, y: cy, life: 1000, max: 1000 });
+        pulse = Math.max(pulse, 0.6);
+        pulseX = cx;
+        pulseY = cy;
+        playChord();
+        for (var hh = hits.length - 1; hh >= 0; hh--) motes.splice(hits[hh], 1);
+        for (var rs = 0; rs < cnt; rs++) motes.push(spawnEdgeMote());
+        if (!firstBloom) {
+          firstBloom = true;
+          onFirstBloom();
+        }
+      }
+    }
+
+    // --- 咲いた光の花 ---
+    for (var bi = blooms.length - 1; bi >= 0; bi--) {
+      var bl = blooms[bi];
+      bl.life -= dt;
+      if (bl.life <= 0) {
+        blooms.splice(bi, 1);
+        continue;
+      }
+      var bpr = 1 - bl.life / bl.max;
+      var brad = 12 + bpr * 120;
+      var ba = 1 - bpr;
+      var bgr = ctx.createRadialGradient(bl.x, bl.y, 0, bl.x, bl.y, brad);
+      bgr.addColorStop(0, "rgba(255,248,220," + ba * 0.5 + ")");
+      bgr.addColorStop(1, "rgba(255,248,220,0)");
+      ctx.fillStyle = bgr;
+      ctx.beginPath();
+      ctx.arc(bl.x, bl.y, brad, 0, Math.PI * 2);
+      ctx.fill();
+      var pet = 6;
+      for (var pk = 0; pk < pet; pk++) {
+        var pang = (pk / pet) * Math.PI * 2 + bpr * 1.4;
+        var pdd = brad * 0.7;
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(255,250,230," + ba * 0.6 + ")";
+        ctx.arc(
+          bl.x + Math.cos(pang) * pdd,
+          bl.y + Math.sin(pang) * pdd,
+          2.4 * (1 - bpr) + 0.5,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+    }
+
     ctx.globalCompositeOperation = "source-over";
 
     // --- 葉っぱ ---
@@ -582,10 +703,34 @@
   var pointers = {}; // id -> {x, y, t}
   var introGone = false;
 
+  // ---- チュートリアル（操作に合わせて段階的に出す）----
+  var hintEl = document.getElementById("hint");
+  var hintP = hintEl ? hintEl.querySelector("p") : null;
+  var gatherHintShown = false;
+
   function dismissIntro() {
     if (introGone) return;
     introGone = true;
     intro.classList.add("hide");
+    // 少し触ったら「光をあつめよう」を案内
+    setTimeout(showGatherHint, 1100);
+  }
+
+  function showGatherHint() {
+    if (gatherHintShown || firstBloom || !hintEl) return;
+    gatherHintShown = true;
+    if (hintP) hintP.textContent = "ひかりを なぞって あつめよう";
+    hintEl.classList.add("show");
+  }
+
+  // 最初の開花でチュートリアル完了
+  function onFirstBloom() {
+    if (!hintEl) return;
+    if (hintP) hintP.textContent = "あつまった！";
+    hintEl.classList.add("show");
+    setTimeout(function () {
+      hintEl.classList.remove("show");
+    }, 1500);
   }
 
   function pos(e) {
@@ -617,13 +762,13 @@
     }
   }
 
-  // 水滴のような澄んだ音。step が高いほど高音（共鳴で上がっていく）。
-  function playDrop(step, strong) {
-    if (!actx || muted) return;
-    var t = actx.currentTime;
-    var idx = step < 0 ? 0 : step >= PENTA.length ? PENTA.length - 1 : step;
+  // 水滴のような澄んだ音。step が高いほど高音、vol で音量、delay で発音を少し遅らせる。
+  function playDrop(step, vol, delay) {
+    if (!actx || muted || vol <= 0) return;
+    var t = actx.currentTime + (delay || 0);
+    var idx = step < 0 ? 0 : step >= PENTA.length ? PENTA.length - 1 : step | 0;
     var freq = PENTA[idx];
-    var peak = strong ? 0.5 : 0.34;
+    var peak = vol;
 
     var o = actx.createOscillator();
     o.type = "sine";
@@ -652,6 +797,19 @@
     o2.stop(t + 0.24);
   }
 
+  // 開花の和音（必ず調和する3音）
+  function playChord() {
+    playDrop(4, 0.34, 0);
+    playDrop(6, 0.3, 0.06);
+    playDrop(8, 0.26, 0.12);
+  }
+
+  // 画面の高さを音階に対応（上ほど高音）。なぞる動きが旋律になる。
+  function noteFromY(py) {
+    var f = 1 - py / H;
+    return Math.round(f * (PENTA.length - 1));
+  }
+
   function onDown(e) {
     dismissIntro();
     initAudio(); // タッチ（ユーザー操作）で音を有効化
@@ -659,40 +817,18 @@
     var now = performance.now();
     pointers[e.pointerId] = { x: p.x, y: p.y, t: now };
 
-    // --- リズム判定（一定テンポで重ねると共鳴。外しても罰なし）---
-    var onBeat = false;
-    if (lastTap) {
-      var iv = now - lastTap;
-      if (iv >= 180 && iv <= 1200) {
-        if (beatIv && Math.abs(iv - beatIv) / beatIv < 0.3) {
-          resonance = Math.min(RES_MAX, resonance + 1); // テンポが続いた
-          onBeat = true;
-        } else {
-          resonance = 1; // グルーヴを切り直す（やさしく）
-        }
-        beatIv = iv;
-      } else {
-        resonance = 0; // 速すぎ／間が空きすぎ
-        beatIv = 0;
-      }
-    }
-    lastTap = now;
-    beatX = p.x;
-    beatY = p.y;
-    playDrop(resonance, onBeat);
-    if (onBeat) pulse = Math.min(1, 0.35 + resonance / RES_MAX);
-
-    // タップ：波紋＋にじむ色。共鳴しているほど波紋は大きく明るく。
-    disturb(p.x, p.y, 3 + resonance * 0.5, 24);
+    // タップ：波紋＋にじむ色＋やさしい水滴音（高さで音程が変わる）
+    disturb(p.x, p.y, 3, 24);
     inkBrush(p.x, p.y, 0.8, 34, hueAt(p.x, p.y, now));
+    playDrop(noteFromY(p.y), 0.34, 0);
     rings.push({
       x: p.x,
       y: p.y,
       r0: 4,
-      r1: 60 + resonance * 22,
-      life: 700 + resonance * 70,
-      max: 700 + resonance * 70,
-      glow: onBeat ? 0.32 + (resonance / RES_MAX) * 0.5 : 0.28,
+      r1: 60,
+      life: 700,
+      max: 700,
+      glow: 0.28,
     });
   }
 
@@ -723,6 +859,12 @@
           var sy = pr.y + dy * t;
           disturb(sx, sy, amp, radPx);
           inkBrush(sx, sy, 0.34, radPx + 6, hueAt(sx, sy, now));
+        }
+
+        // 動き＝音：なぞる高さでやさしい旋律が流れる（鳴りすぎないよう間引く）
+        if (now - lastNote > 95) {
+          lastNote = now;
+          playDrop(noteFromY(p.y), 0.05 + fast * 0.13, 0);
         }
 
         if (fast > 0.6) {
@@ -796,8 +938,7 @@
     rings.length = 0;
     splashes.length = 0;
     streaks.length = 0;
-    resonance = 0;
-    beatIv = 0;
+    blooms.length = 0;
     pulse = 0;
     seedParticles();
   });
