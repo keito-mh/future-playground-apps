@@ -39,9 +39,9 @@
   var HUE_LUT = new Float32Array(360 * 3);
   (function buildHueLUT() {
     for (var h = 0; h < 360; h++) {
-      // HSL(h, 85%, 55%) 相当のあざやかな色
-      var s = 0.85,
-        l = 0.55;
+      // HSL(h, 48%, 62%) 相当のやわらかいパステル
+      var s = 0.48,
+        l = 0.62;
       var c = (1 - Math.abs(2 * l - 1)) * s;
       var hp = h / 60;
       var xx = c * (1 - Math.abs((hp % 2) - 1));
@@ -92,55 +92,55 @@
   // grains   : 光の粒の数 / leaves: 葉っぱの数
   var MODES = {
     clear: {
-      K: 0.26,
+      K: 0.12,
       damping: 0.955,
       spread: 0.5,
-      amb: 0.05,
+      amb: 0.035,
       flow: { x: 0, y: 0 },
-      top: [86, 196, 232],
-      bot: [12, 58, 96],
-      hi: [220, 248, 255],
-      spec: 0.55,
-      grains: 16,
+      top: [96, 188, 222],
+      bot: [26, 78, 118],
+      hi: [206, 234, 246],
+      spec: 0.18,
+      grains: 14,
       leaves: 4,
     },
     flow: {
-      K: 0.24,
+      K: 0.11,
       damping: 0.965,
       spread: 0.5,
-      amb: 0.07,
+      amb: 0.045,
       flow: { x: 0.18, y: 0.06 },
-      top: [96, 214, 196],
-      bot: [14, 74, 78],
-      hi: [224, 255, 246],
-      spec: 0.5,
-      grains: 22,
+      top: [108, 204, 192],
+      bot: [28, 92, 96],
+      hi: [212, 240, 232],
+      spec: 0.16,
+      grains: 18,
       leaves: 6,
     },
     jelly: {
-      K: 0.3,
+      K: 0.14,
       damping: 0.984, // 長めに揺れて、ぷるっと戻る
       spread: 0.46, // 重め
-      amb: 0.04,
+      amb: 0.03,
       flow: { x: 0, y: 0 },
-      top: [150, 150, 240],
-      bot: [54, 40, 110],
-      hi: [240, 232, 255],
-      spec: 0.7,
+      top: [156, 158, 232],
+      bot: [66, 56, 122],
+      hi: [226, 222, 244],
+      spec: 0.24,
       grains: 12,
       leaves: 3,
     },
     sparkle: {
-      K: 0.27,
+      K: 0.13,
       damping: 0.95,
       spread: 0.5,
-      amb: 0.06,
+      amb: 0.045,
       flow: { x: 0.04, y: -0.05 },
-      top: [224, 158, 214],
-      bot: [70, 40, 96],
-      hi: [255, 246, 224],
-      spec: 0.85,
-      grains: 64,
+      top: [220, 168, 208],
+      bot: [84, 56, 108],
+      hi: [240, 230, 220],
+      spec: 0.34,
+      grains: 40,
       leaves: 3,
     },
   };
@@ -311,8 +311,8 @@
       hiG = mode.hi[1],
       hiB = mode.hi[2];
     // 陰影の強さは解像度に追従させる（格子を細かくしても隣との
-    // 高さ差が小さくなる分をスケールで補い、コントラストを保つ）。
-    var K = mode.K * (cols / 40);
+    // 高さ差が小さくなる分を補う）。ギラつき防止に控えめなスケール。
+    var K = mode.K * Math.min(1.3, cols / 60);
     var amb = mode.amb;
     var spec = mode.spec;
     var fx = mode.flow.x;
@@ -342,7 +342,7 @@
         var cs = cstr[i];
         if (cs > 0.004) {
           var li = (chue[i] | 0) * 3;
-          var t = (cs > 1 ? 1 : cs) * 0.8;
+          var t = (cs > 1 ? 1 : cs) * 0.45;
           cR = bR + (HUE_LUT[li] - bR) * t;
           cG = bG + (HUE_LUT[li + 1] - bG) * t;
           cB = bB + (HUE_LUT[li + 2] - bB) * t;
@@ -366,12 +366,12 @@
         var light = shade > 0 ? shade : 0;
         var dark = shade < 0 ? -shade : 0;
         var l2 = light * light;
-        var s4 = l2 * l2; // ハイライトの芯（よりシャープなきらめき）
+        var s3 = l2 * light; // ハイライトの芯（やわらかく広がる艶）
 
         var p = i * 4;
-        var r = cR + hiR * light * 0.5 + 255 * s4 * spec - cR * dark * 0.45;
-        var g = cG + hiG * light * 0.5 + 255 * s4 * spec - cG * dark * 0.45;
-        var b = cB + hiB * light * 0.5 + 255 * s4 * spec - cB * dark * 0.45;
+        var r = cR + hiR * light * 0.28 + 255 * s3 * spec - cR * dark * 0.4;
+        var g = cG + hiG * light * 0.28 + 255 * s3 * spec - cG * dark * 0.4;
+        var b = cB + hiB * light * 0.28 + 255 * s3 * spec - cB * dark * 0.4;
         data[p] = r > 255 ? 255 : r < 0 ? 0 : r;
         data[p + 1] = g > 255 ? 255 : g < 0 ? 0 : g;
         data[p + 2] = b > 255 ? 255 : b < 0 ? 0 : b;
@@ -411,10 +411,10 @@
       }
       var pr = 1 - rg.life / rg.max;
       var radius = rg.r0 + (rg.r1 - rg.r0) * pr;
-      var a = (1 - pr) * 0.5;
+      var a = (1 - pr) * 0.28;
       ctx.beginPath();
       ctx.strokeStyle = "rgba(235,250,255," + a + ")";
-      ctx.lineWidth = 2 * (1 - pr) + 0.5;
+      ctx.lineWidth = 1.5 * (1 - pr) + 0.5;
       ctx.arc(rg.x, rg.y, radius, 0, Math.PI * 2);
       ctx.stroke();
     }
@@ -428,7 +428,7 @@
         streaks.splice(s, 1);
         continue;
       }
-      var sa = (st.life / st.max) * 0.5;
+      var sa = (st.life / st.max) * 0.22;
       ctx.beginPath();
       ctx.strokeStyle = "rgba(255,255,255," + sa + ")";
       ctx.lineWidth = st.w * (st.life / st.max);
@@ -448,7 +448,7 @@
       dp.vy += 0.0009 * dt; // ゆるい重力
       dp.x += dp.vx * dt;
       dp.y += dp.vy * dt;
-      var da = (dp.life / dp.max) * 0.85;
+      var da = (dp.life / dp.max) * 0.5;
       ctx.beginPath();
       ctx.fillStyle = "rgba(245,253,255," + da + ")";
       ctx.arc(dp.x, dp.y, dp.r, 0, Math.PI * 2);
@@ -469,7 +469,7 @@
       gr.ph += gr.sp * dt;
       var tw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(gr.ph));
       ctx.beginPath();
-      ctx.fillStyle = "rgba(255,252,235," + tw * 0.8 + ")";
+      ctx.fillStyle = "rgba(255,252,235," + tw * 0.5 + ")";
       ctx.arc(gr.x, gr.y, gr.r, 0, Math.PI * 2);
       ctx.fill();
     }
@@ -544,8 +544,8 @@
     var now = performance.now();
     pointers[e.pointerId] = { x: p.x, y: p.y, t: now };
     // タップ：小さな波紋＋触れた場所からにじむ色
-    disturb(p.x, p.y, 5, 24);
-    inkBrush(p.x, p.y, 1.0, 34, hueAt(p.x, p.y, now));
+    disturb(p.x, p.y, 3, 24);
+    inkBrush(p.x, p.y, 0.8, 34, hueAt(p.x, p.y, now));
     rings.push({
       x: p.x,
       y: p.y,
@@ -573,7 +573,7 @@
       if (dist > 0.5) {
         // 速いほど強い波・細い軌跡、ゆっくりは広くやわらかく分かれる
         var fast = Math.min(1, speed / 1.6);
-        var amp = 3 + fast * 6;
+        var amp = 1.6 + fast * 3;
         var radPx = 32 - fast * 16; // ゆっくり=広く、速い=細く
         // 軌跡に沿って補間しながら水面をひらき、色も流し込む
         var steps = Math.max(1, Math.ceil(dist / 6));
@@ -582,22 +582,22 @@
           var sx = pr.x + dx * t;
           var sy = pr.y + dy * t;
           disturb(sx, sy, amp, radPx);
-          inkBrush(sx, sy, 0.5, radPx + 6, hueAt(sx, sy, now));
+          inkBrush(sx, sy, 0.34, radPx + 6, hueAt(sx, sy, now));
         }
 
-        if (fast > 0.45) {
-          // 速い：白い筋
+        if (fast > 0.6) {
+          // 速い：やわらかな白い筋
           streaks.push({
             x1: pr.x,
             y1: pr.y,
             x2: p.x,
             y2: p.y,
-            w: 1 + fast * 3,
+            w: 1 + fast * 1.5,
             life: 220,
             max: 220,
           });
           // 速い：水しぶき
-          var n = Math.round(fast * 3);
+          var n = Math.round(fast * 2);
           var nxp = -dy / (dist || 1);
           var nyp = dx / (dist || 1);
           for (var d = 0; d < n; d++) {
