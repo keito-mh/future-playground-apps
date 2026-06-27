@@ -43,6 +43,8 @@
     pulseY = 0;
   var lastBloom = 0, // 連続開花のクールダウン用
     lastNote = 0; // なぞり音のスロットリング用
+  var bloomCount = 0, // これまでの開花数
+    nextSpecial = 5; // この開花数に達したら特別演出（毎回ランダムに更新）
   var GATHER_NEED = 4; // この数だけ指元に集まると開花
   var BLOOM_R = 54; // 指元のこの半径に集まったら開花
   var PULL_R = 230; // 光が指に引かれる範囲（この外の光は避けられる）
@@ -621,7 +623,7 @@
         lastBloom = nowt;
         cx /= cnt;
         cy /= cnt;
-        blooms.push({ x: cx, y: cy, life: 1000, max: 1000 });
+        blooms.push({ x: cx, y: cy, life: 1000, max: 1000, peak: 120, pet: 6 });
         pulse = Math.max(pulse, 0.6);
         pulseX = cx;
         pulseY = cy;
@@ -630,6 +632,12 @@
         if (!firstBloom) {
           firstBloom = true;
           onFirstBloom();
+        }
+        // 何回かの開花ごとに、ランダムな特別演出
+        bloomCount++;
+        if (bloomCount >= nextSpecial) {
+          nextSpecial = bloomCount + 5 + Math.floor(rand(0, 5));
+          fireSpecial(cx, cy);
         }
       }
     }
@@ -643,7 +651,7 @@
         continue;
       }
       var bpr = 1 - bl.life / bl.max;
-      var brad = 12 + bpr * 120;
+      var brad = 12 + bpr * (bl.peak || 120);
       var ba = 1 - bpr;
       var bgr = ctx.createRadialGradient(bl.x, bl.y, 0, bl.x, bl.y, brad);
       bgr.addColorStop(0, "rgba(255,248,220," + ba * 0.5 + ")");
@@ -652,7 +660,7 @@
       ctx.beginPath();
       ctx.arc(bl.x, bl.y, brad, 0, Math.PI * 2);
       ctx.fill();
-      var pet = 6;
+      var pet = bl.pet || 6;
       for (var pk = 0; pk < pet; pk++) {
         var pang = (pk / pet) * Math.PI * 2 + bpr * 1.4;
         var pdd = brad * 0.7;
@@ -825,6 +833,85 @@
     return Math.round(f * (PENTA.length - 1));
   }
 
+  // ===================================================================
+  // 特別演出（何回かの開花ごとに、ランダムな種類で出る）
+  // ===================================================================
+  function fireSpecial(x, y, forceKind) {
+    var kind = forceKind != null ? forceKind : Math.floor(rand(0, 4));
+    pulse = 0.95;
+    pulseX = x;
+    pulseY = y;
+
+    if (kind === 0) {
+      // 大輪：おおきな光の花＋広がる波紋＋駆け上がる音
+      blooms.push({ x: x, y: y, life: 1700, max: 1700, peak: 260, pet: 14 });
+      for (var i = 0; i < 3; i++) {
+        rings.push({
+          x: x,
+          y: y,
+          r0: 6,
+          r1: 200 + i * 90,
+          life: 1200 + i * 220,
+          max: 1200 + i * 220,
+          glow: 0.4,
+        });
+      }
+      for (var n = 0; n < 6; n++) playDrop(2 + n * 2, 0.3, n * 0.09);
+    } else if (kind === 1) {
+      // 光のシャワー：きらめきがふわっと降りそそぐ
+      for (var s = 0; s < 26; s++) {
+        splashes.push({
+          x: x + rand(-170, 170),
+          y: y + rand(-150, -10),
+          vx: rand(-0.03, 0.03),
+          vy: rand(0.03, 0.1),
+          r: rand(1, 2.6),
+          life: rand(700, 1200),
+          max: 1200,
+        });
+      }
+      blooms.push({ x: x, y: y, life: 1000, max: 1000, peak: 140, pet: 8 });
+      for (var m = 0; m < 5; m++) playDrop(7 + m, 0.22, m * 0.07);
+    } else if (kind === 2) {
+      // 虹の波紋：色とりどりの波紋が広がる
+      for (var r = 0; r < 4; r++) {
+        rings.push({
+          x: x,
+          y: y,
+          r0: 8 + r * 6,
+          r1: 250,
+          life: 1100 + r * 140,
+          max: 1100 + r * 140,
+          glow: 0.32,
+        });
+      }
+      for (var a = 0; a < 12; a++) {
+        var ang = (a / 12) * Math.PI * 2;
+        inkBrush(
+          x + Math.cos(ang) * 32,
+          y + Math.sin(ang) * 32,
+          0.7,
+          44,
+          (a / 12) * 360
+        );
+      }
+      disturb(x, y, 4, 64);
+      playChord();
+    } else {
+      // ホタルの舞：光がぱっと弾けて散る（また集められる）
+      for (var f = 0; f < 12; f++) {
+        var mo = makeMote(x, y);
+        var fa = rand(0, Math.PI * 2);
+        var fsp = rand(2.5, 5.5);
+        mo.vx = Math.cos(fa) * fsp;
+        mo.vy = Math.sin(fa) * fsp;
+        motes.push(mo);
+      }
+      blooms.push({ x: x, y: y, life: 900, max: 900, peak: 120, pet: 8 });
+      playChord();
+    }
+  }
+
   function onDown(e) {
     dismissIntro();
     initAudio(); // タッチ（ユーザー操作）で音を有効化
@@ -955,6 +1042,8 @@
     streaks.length = 0;
     blooms.length = 0;
     pulse = 0;
+    bloomCount = 0;
+    nextSpecial = 5;
     seedParticles();
   });
 
