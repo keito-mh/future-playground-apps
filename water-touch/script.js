@@ -45,6 +45,12 @@
     lastNote = 0; // なぞり音のスロットリング用
   var GATHER_NEED = 4; // この数だけ指元に集まると開花
   var BLOOM_R = 54; // 指元のこの半径に集まったら開花
+  var PULL_R = 230; // 光が指に引かれる範囲（この外の光は避けられる）
+  var spawnTimer = 0; // 光がわき続けるためのタイマー
+  var SPAWN_IV = 300; // 約0.3秒ごとに縁から1粒ふえる
+  function maxMotes() {
+    return modeName === "sparkle" ? 40 : 32;
+  }
   var firstBloom = false; // チュートリアル進行用
 
   // ---- 音 ----
@@ -226,7 +232,8 @@
     motes.length = 0;
     for (var i = 0; i < mode.grains; i++) grains.push(makeGrain());
     for (var j = 0; j < mode.leaves; j++) leaves.push(makeLeaf());
-    var nm = modeName === "sparkle" ? 16 : 12;
+    // 最初から画面にいくつか散らし、残りは時間で縁から湧いて上限まで満ちる
+    var nm = Math.round(maxMotes() * 0.6);
     for (var k = 0; k < nm; k++) motes.push(makeMote(rand(0, W), rand(0, H)));
   }
 
@@ -237,7 +244,7 @@
       y: y,
       vx: 0,
       vy: 0,
-      r: rand(2, 3.2),
+      r: rand(1.6, 2.6),
       ph: rand(0, Math.PI * 2),
       sp: rand(0.003, 0.006),
     };
@@ -550,20 +557,29 @@
     var pl = [];
     for (var id in pointers) pl.push(pointers[id]);
 
+    // 光は時間とともに縁から湧き続ける（上限まで補充）。集めなくても絶えない。
+    spawnTimer += dt;
+    var cap = maxMotes();
+    while (spawnTimer >= SPAWN_IV) {
+      spawnTimer -= SPAWN_IV;
+      if (motes.length < cap) motes.push(spawnEdgeMote());
+    }
+
     for (var mi = 0; mi < motes.length; mi++) {
       var mt = motes[mi];
       sampleSlope(mt.x, mt.y, slope); // 波でもゆれる
       mt.vx += slope.x * 0.015 + fx * 0.01;
       mt.vy += slope.y * 0.015 + fy * 0.01;
-      // 触れている指へスーッと引き寄せられる＝動かすほど光が集まってくる。
-      // 画面全体に効く弱い牽引。指の近くでは弱めて、そっと溜まる。
+      // 指の近く（PULL_R内）の光だけがスーッと寄ってくる。遠い光は避けられる。
       for (var pi = 0; pi < pl.length; pi++) {
         var ax = pl[pi].x - mt.x;
         var ay = pl[pi].y - mt.y;
         var ad = Math.sqrt(ax * ax + ay * ay) + 0.001;
-        var acc = 0.5 * Math.min(1, ad / 40);
-        mt.vx += (ax / ad) * acc;
-        mt.vy += (ay / ad) * acc;
+        if (ad < PULL_R) {
+          var acc = 0.6 * (1 - ad / PULL_R) * Math.min(1, ad / 40);
+          mt.vx += (ax / ad) * acc;
+          mt.vy += (ay / ad) * acc;
+        }
       }
       mt.vx *= 0.85;
       mt.vy *= 0.85;
@@ -573,11 +589,11 @@
       mt.ph += mt.sp * dt;
       var mtw = 0.6 + 0.4 * Math.sin(mt.ph);
       ctx.beginPath(); // やわらかな光暈
-      ctx.fillStyle = "rgba(255,242,198," + 0.16 * mtw + ")";
-      ctx.arc(mt.x, mt.y, mt.r * 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,242,198," + 0.13 * mtw + ")";
+      ctx.arc(mt.x, mt.y, mt.r * 3, 0, Math.PI * 2);
       ctx.fill();
       ctx.beginPath(); // 芯
-      ctx.fillStyle = "rgba(255,252,236," + 0.92 * mtw + ")";
+      ctx.fillStyle = "rgba(255,252,236," + 0.8 * mtw + ")";
       ctx.arc(mt.x, mt.y, mt.r, 0, Math.PI * 2);
       ctx.fill();
     }
@@ -611,7 +627,6 @@
         pulseY = cy;
         playChord();
         for (var hh = hits.length - 1; hh >= 0; hh--) motes.splice(hits[hh], 1);
-        for (var rs = 0; rs < cnt; rs++) motes.push(spawnEdgeMote());
         if (!firstBloom) {
           firstBloom = true;
           onFirstBloom();
