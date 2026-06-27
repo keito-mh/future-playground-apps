@@ -69,8 +69,8 @@
   })();
 
   // ---- メロディ（著作権フリー＝パブリックドメインの曲のみ）----
-  // 開花するたびに次の音符が鳴る。曲のリズムで咲かせると、その曲になる。
-  // 曲はモードごとに変わる（計4曲）。数字は C(=0) からの半音。
+  // なぞっている間、曲が「本物のリズム」で流れる。数字は C(=0) からの半音、
+  // beats は音の長さ（1=四分音符, 2=二分, 0.5=八分）。曲はモードごとに変わる。
   var MELODY_BASE = 523.25; // C5
   var MELODIES = {
     clear: {
@@ -79,12 +79,20 @@
         0, 0, 7, 7, 9, 9, 7, 5, 5, 4, 4, 2, 2, 0, 7, 7, 5, 5, 4, 4, 2, 7, 7, 5,
         5, 4, 4, 2, 0, 0, 7, 7, 9, 9, 7, 5, 5, 4, 4, 2, 2, 0,
       ],
+      beats: [
+        1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1,
+        1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2,
+      ],
     },
     flow: {
       name: "かえるのうた",
       notes: [
         0, 2, 4, 5, 4, 2, 0, 4, 5, 7, 9, 7, 5, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
         4, 5, 4, 2, 0,
+      ],
+      beats: [
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
+        0.5, 0.5, 1, 1, 1, 1, 1, 1, 2,
       ],
     },
     jelly: {
@@ -93,6 +101,10 @@
         4, 2, 0, 2, 4, 4, 4, 2, 2, 2, 4, 7, 7, 4, 2, 0, 2, 4, 4, 4, 4, 2, 2, 4,
         2, 0,
       ],
+      beats: [
+        1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 2,
+      ],
     },
     sparkle: {
       name: "よろこびの歌",
@@ -100,10 +112,15 @@
         4, 4, 5, 7, 7, 5, 4, 2, 0, 0, 2, 4, 4, 2, 2, 4, 4, 5, 7, 7, 5, 4, 2, 0,
         0, 2, 4, 2, 0, 0,
       ],
+      beats: [
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.5, 0.5, 2, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1.5, 0.5, 2, 2,
+      ],
     },
   };
   var noteIdx = 0; // 今のモードの曲の、次に鳴らす音符
-  var NOTE_IV = 360; // 1音の間隔（ms）＝テンポ。なぞっている間このリズムで進む
+  var BEAT_MS = 400; // 四分音符の長さ（ms）＝テンポ
+  var curNoteDur = BEAT_MS; // いま鳴っている音の長さ（次の音までの間隔）
   var noteClock = 0; // テンポの時計
   var previewLeft = 0; // モード切替時に自動試聴する残り音数
   var lastPlayX = 0,
@@ -592,9 +609,9 @@
     }
     if (anyDown || previewLeft > 0) {
       noteClock += dt;
-      while (noteClock >= NOTE_IV) {
-        noteClock -= NOTE_IV;
-        stepMelody(lastPlayX, lastPlayY);
+      while (noteClock >= curNoteDur) {
+        noteClock -= curNoteDur;
+        stepMelody(lastPlayX, lastPlayY); // 中で curNoteDur を更新（音の長さ＝次までの間隔）
         if (previewLeft > 0) previewLeft--;
       }
     }
@@ -1077,22 +1094,23 @@
     playDrop(8, 0.26, 0.12);
   }
 
-  // メロディの音（オルゴール調のきれいな音。曲がはっきり聞こえる）
-  function playNote(semi, vol) {
+  // メロディの音（オルゴール調のきれいな音）。beats が大きいほど長く響く。
+  function playNote(semi, vol, beats) {
     if (!actx || muted || vol <= 0) return;
     var t = actx.currentTime;
     var freq = MELODY_BASE * Math.pow(2, semi / 12);
+    var dur = Math.max(0.5, (beats || 1) * (BEAT_MS / 1000) * 0.95); // 音の余韻
     var o = actx.createOscillator();
     o.type = "sine";
     var g = actx.createGain();
     o.frequency.value = freq;
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g);
     g.connect(master);
     o.start(t);
-    o.stop(t + 0.95);
+    o.stop(t + dur + 0.05);
     // きらめく倍音
     var o2 = actx.createOscillator();
     o2.type = "sine";
@@ -1100,21 +1118,23 @@
     var g2 = actx.createGain();
     g2.gain.setValueAtTime(0.0001, t);
     g2.gain.exponentialRampToValueAtTime(vol * 0.32, t + 0.008);
-    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + Math.min(dur, 0.45));
     o2.connect(g2);
     g2.connect(master);
     o2.start(t);
-    o2.stop(t + 0.47);
+    o2.stop(t + 0.5);
   }
 
   // 曲の次の音を鳴らし、指先で光をポンと咲かせる（音が見える）。
-  // なぞっている間 NOTE_IV ごとに呼ばれ、曲が正しいリズムで流れる。
+  // なぞっている間、音の長さ（拍）に応じた間隔で呼ばれ、曲が正しいリズムで流れる。
   function stepMelody(x, y) {
     var song = MELODIES[modeName];
-    playNote(song.notes[noteIdx], 0.42);
-    // 音を光で見せる：小さな光の花＋波紋＋水のゆらぎ
+    var b = song.beats ? song.beats[noteIdx] : 1;
+    curNoteDur = b * BEAT_MS; // この音の長さ＝次の音までの間隔（本物のリズム）
+    playNote(song.notes[noteIdx], 0.42, b);
+    // 音を光で見せる：小さな光の花＋波紋＋水のゆらぎ（長い音は大きめに）
     disturb(x, y, 2.6, 26);
-    blooms.push({ x: x, y: y, life: 540, max: 540, peak: 42, pet: 5 });
+    blooms.push({ x: x, y: y, life: 540, max: 540, peak: 42 + b * 10, pet: 5 });
     rings.push({ x: x, y: y, r0: 4, r1: 72, life: 540, max: 540, glow: 0.34 });
     noteIdx = (noteIdx + 1) % song.notes.length; // 最後までいったら頭から
   }
@@ -1330,6 +1350,8 @@
       lastPlayY = H * 0.42;
       noteClock = 0;
       previewLeft = 7; // 新しい曲の出だしが流れて、変わったのが分かる
+      stepMelody(lastPlayX, lastPlayY); // 1音目はすぐ鳴らす
+      previewLeft = 6;
     });
   });
 
