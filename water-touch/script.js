@@ -59,7 +59,7 @@
   var actx = null,
     master = null,
     muted = false;
-  // ペンタトニック音階の周波数（どの音も濁らない＝瞑想的）
+  // ペンタトニック音階の周波数（どの音も濁らない＝瞑想的。タップ/なぞり/特別演出用）
   var PENTA = [];
   (function () {
     var base = 523.25; // C5
@@ -68,6 +68,36 @@
       PENTA.push(base * Math.pow(2, semis[i] / 12));
     }
   })();
+
+  // ---- メロディ（著作権フリー＝パブリックドメインの曲のみ）----
+  // 開花するたびに次の音符が鳴る。曲のリズムで咲かせると、その曲になる。
+  // 数字は C(=0) からの半音。みんなが知っている曲なので、自然と合わせられる。
+  var MELODY_BASE = 523.25; // C5
+  var MELODIES = [
+    {
+      name: "きらきらぼし",
+      notes: [
+        0, 0, 7, 7, 9, 9, 7, 5, 5, 4, 4, 2, 2, 0, 7, 7, 5, 5, 4, 4, 2, 7, 7, 5,
+        5, 4, 4, 2, 0, 0, 7, 7, 9, 9, 7, 5, 5, 4, 4, 2, 2, 0,
+      ],
+    },
+    {
+      name: "メリーさんのひつじ",
+      notes: [
+        4, 2, 0, 2, 4, 4, 4, 2, 2, 2, 4, 7, 7, 4, 2, 0, 2, 4, 4, 4, 4, 2, 2, 4,
+        2, 0,
+      ],
+    },
+    {
+      name: "よろこびの歌",
+      notes: [
+        4, 4, 5, 7, 7, 5, 4, 2, 0, 0, 2, 4, 4, 2, 2, 4, 4, 5, 7, 7, 5, 4, 2, 0,
+        0, 2, 4, 2, 0, 0,
+      ],
+    },
+  ];
+  var melodyIdx = 0,
+    noteIdx = 0;
 
   // 色相→RGB のルックアップテーブル（毎フレームの三角関数計算を避けて軽量化）
   var HUE_LUT = new Float32Array(360 * 3);
@@ -729,7 +759,7 @@
         pulse = Math.max(pulse, 0.6);
         pulseX = cx;
         pulseY = cy;
-        playChord();
+        playMelodyNote(); // 開花＝曲の次の音
         for (var hh = hits.length - 1; hh >= 0; hh--) motes.splice(hits[hh], 1);
         if (!firstBloom) {
           firstBloom = true;
@@ -929,9 +959,9 @@
     hintEl.classList.add("show");
   }
 
-  // 最初の開花：光がともる
+  // 最初の開花：光がともり、最初の曲名をそっと知らせる
   function onFirstBloom() {
-    flashHint("ともった！", 1600);
+    flashHint("♪ " + MELODIES[melodyIdx].name, 1700);
   }
 
   // 節目：水辺が育ったことを短く伝える
@@ -1026,6 +1056,48 @@
     return Math.round(f * (PENTA.length - 1));
   }
 
+  // メロディの音（オルゴール調のきれいな音。曲がはっきり聞こえる）
+  function playNote(semi, vol) {
+    if (!actx || muted || vol <= 0) return;
+    var t = actx.currentTime;
+    var freq = MELODY_BASE * Math.pow(2, semi / 12);
+    var o = actx.createOscillator();
+    o.type = "sine";
+    var g = actx.createGain();
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+    o.connect(g);
+    g.connect(master);
+    o.start(t);
+    o.stop(t + 0.95);
+    // きらめく倍音
+    var o2 = actx.createOscillator();
+    o2.type = "sine";
+    o2.frequency.value = freq * 2;
+    var g2 = actx.createGain();
+    g2.gain.setValueAtTime(0.0001, t);
+    g2.gain.exponentialRampToValueAtTime(vol * 0.32, t + 0.008);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    o2.connect(g2);
+    g2.connect(master);
+    o2.start(t);
+    o2.stop(t + 0.47);
+  }
+
+  // 開花のたびに、曲の次の音符を鳴らす。曲のリズムで咲かせると、その曲になる。
+  function playMelodyNote() {
+    var song = MELODIES[melodyIdx];
+    if (noteIdx === 0 && firstBloom) flashHint("♪ " + song.name, 1500);
+    playNote(song.notes[noteIdx], 0.4);
+    noteIdx++;
+    if (noteIdx >= song.notes.length) {
+      noteIdx = 0;
+      melodyIdx = (melodyIdx + 1) % MELODIES.length; // 次の曲へ
+    }
+  }
+
   // ===================================================================
   // 特別演出（何回かの開花ごとに、ランダムな種類で出る）
   // ===================================================================
@@ -1115,7 +1187,7 @@
     // タップ：波紋＋にじむ色＋やさしい水滴音（高さで音程が変わる）
     disturb(p.x, p.y, 3 * mode.ampMul, 24);
     inkBrush(p.x, p.y, 0.8, 34, hueAt(p.x, p.y, now));
-    playDrop(noteFromY(p.y), 0.34, 0);
+    playDrop(noteFromY(p.y), 0.2, 0); // タップ音はメロディを邪魔しない控えめさ
     if (mode.glint) sparkleBurst(p.x, p.y, 4);
     rings.push({
       x: p.x,
@@ -1157,10 +1229,10 @@
           inkBrush(sx, sy, 0.34, radPx + 6, hueAt(sx, sy, now));
         }
 
-        // 動き＝音：なぞる高さでやさしい旋律が流れる（鳴りすぎないよう間引く）
-        if (now - lastNote > 95) {
+        // 動き＝かすかな水音（メロディの邪魔をしないよう控えめに）
+        if (now - lastNote > 110) {
           lastNote = now;
-          playDrop(noteFromY(p.y), 0.05 + fast * 0.13, 0);
+          playDrop(noteFromY(p.y), 0.03 + fast * 0.06, 0);
         }
 
         // きらめきモード：なぞると光の粒子が散る
@@ -1241,6 +1313,8 @@
     pulse = 0;
     bloomCount = 0;
     nextSpecial = mode.specialBase;
+    melodyIdx = 0;
+    noteIdx = 0;
     resetWorld(); // 夜の水辺に戻し、また育て直せる
     seedParticles();
   });
