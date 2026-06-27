@@ -41,8 +41,7 @@
   var pulse = 0, // 開花時の全体のやわらかな光
     pulseX = 0,
     pulseY = 0;
-  var lastBloom = 0, // 連続開花のクールダウン用
-    lastNote = 0; // なぞり音のスロットリング用
+  var lastBloom = 0; // 連続開花のクールダウン用
   var bloomCount = 0, // これまでの開花数
     nextSpecial = 5; // この開花数に達したら特別演出（毎回ランダムに更新）
   var GATHER_NEED = 4; // この数だけ指元に集まると開花
@@ -104,6 +103,11 @@
     },
   };
   var noteIdx = 0; // 今のモードの曲の、次に鳴らす音符
+  var NOTE_IV = 360; // 1音の間隔（ms）＝テンポ。なぞっている間このリズムで進む
+  var noteClock = 0; // テンポの時計
+  var previewLeft = 0; // モード切替時に自動試聴する残り音数
+  var lastPlayX = 0,
+    lastPlayY = 0; // 音を光らせる位置（指の場所）
 
   // 色相→RGB のルックアップテーブル（毎フレームの三角関数計算を避けて軽量化）
   var HUE_LUT = new Float32Array(360 * 3);
@@ -578,6 +582,23 @@
     var fy = mode.flow.y;
     var lfrac = lifeFrac();
 
+    // --- メロディの時計：なぞっている間（または試聴中）、曲が一定リズムで流れる ---
+    var anyDown = false;
+    for (var pid in pointers) {
+      anyDown = true;
+      lastPlayX = pointers[pid].x;
+      lastPlayY = pointers[pid].y;
+      break;
+    }
+    if (anyDown || previewLeft > 0) {
+      noteClock += dt;
+      while (noteClock >= NOTE_IV) {
+        noteClock -= NOTE_IV;
+        stepMelody(lastPlayX, lastPlayY);
+        if (previewLeft > 0) previewLeft--;
+      }
+    }
+
     // --- 星空（育つほど数と明るさが増す。水面にうつる光）---
     if (lfrac > 0.001) {
       ctx.globalCompositeOperation = "lighter";
@@ -765,7 +786,7 @@
         pulse = Math.max(pulse, 0.6);
         pulseX = cx;
         pulseY = cy;
-        playMelodyNote(); // 開花＝曲の次の音
+        playDrop(10, 0.18, 0); // 開花のごほうび（やさしいきらめき音）
         for (var hh = hits.length - 1; hh >= 0; hh--) motes.splice(hits[hh], 1);
         if (!firstBloom) {
           firstBloom = true;
@@ -943,8 +964,10 @@
     if (introGone) return;
     introGone = true;
     intro.classList.add("hide");
-    // 少し触ったら「光をあつめよう」を案内
-    setTimeout(showGatherHint, 1100);
+    // 触れた瞬間から曲が流れる。今の曲名をそっと知らせる
+    flashHint("♪ " + MELODIES[modeName].name, 1600);
+    // 少ししてから「光をあつめて育てよう」を案内
+    setTimeout(showGatherHint, 2600);
   }
 
   var hintTimer = null;
@@ -965,10 +988,8 @@
     hintEl.classList.add("show");
   }
 
-  // 最初の開花：光がともり、曲名をそっと知らせる
-  function onFirstBloom() {
-    flashHint("♪ " + MELODIES[modeName].name, 1700);
-  }
+  // 最初の開花（曲名は最初のタッチで知らせ済み。ここでは何もしない）
+  function onFirstBloom() {}
 
   // 節目：水辺が育ったことを短く伝える
   var MILESTONES = [
@@ -1056,12 +1077,6 @@
     playDrop(8, 0.26, 0.12);
   }
 
-  // 画面の高さを音階に対応（上ほど高音）。なぞる動きが旋律になる。
-  function noteFromY(py) {
-    var f = 1 - py / H;
-    return Math.round(f * (PENTA.length - 1));
-  }
-
   // メロディの音（オルゴール調のきれいな音。曲がはっきり聞こえる）
   function playNote(semi, vol) {
     if (!actx || muted || vol <= 0) return;
@@ -1092,11 +1107,15 @@
     o2.stop(t + 0.47);
   }
 
-  // 開花のたびに、今のモードの曲の次の音符を鳴らす。
-  // 曲のリズムで咲かせると、その曲になる。曲はモードチェンジで変わる。
-  function playMelodyNote() {
+  // 曲の次の音を鳴らし、指先で光をポンと咲かせる（音が見える）。
+  // なぞっている間 NOTE_IV ごとに呼ばれ、曲が正しいリズムで流れる。
+  function stepMelody(x, y) {
     var song = MELODIES[modeName];
-    playNote(song.notes[noteIdx], 0.4);
+    playNote(song.notes[noteIdx], 0.42);
+    // 音を光で見せる：小さな光の花＋波紋＋水のゆらぎ
+    disturb(x, y, 2.6, 26);
+    blooms.push({ x: x, y: y, life: 540, max: 540, peak: 42, pet: 5 });
+    rings.push({ x: x, y: y, r0: 4, r1: 72, life: 540, max: 540, glow: 0.34 });
     noteIdx = (noteIdx + 1) % song.notes.length; // 最後までいったら頭から
   }
 
@@ -1186,10 +1205,12 @@
     var now = performance.now();
     pointers[e.pointerId] = { x: p.x, y: p.y, t: now };
 
-    // タップ：波紋＋にじむ色＋やさしい水滴音（高さで音程が変わる）
-    disturb(p.x, p.y, 3 * mode.ampMul, 24);
+    // タップ／なぞり始め：その場で曲の1音を鳴らす（押した瞬間に反応）
     inkBrush(p.x, p.y, 0.8, 34, hueAt(p.x, p.y, now));
-    playDrop(noteFromY(p.y), 0.2, 0); // タップ音はメロディを邪魔しない控えめさ
+    lastPlayX = p.x;
+    lastPlayY = p.y;
+    noteClock = 0; // この音を起点にリズムが進む
+    stepMelody(p.x, p.y);
     if (mode.glint) sparkleBurst(p.x, p.y, 4);
     rings.push({
       x: p.x,
@@ -1229,12 +1250,6 @@
           var sy = pr.y + dy * t;
           disturb(sx, sy, amp, radPx);
           inkBrush(sx, sy, 0.34, radPx + 6, hueAt(sx, sy, now));
-        }
-
-        // 動き＝かすかな水音（メロディの邪魔をしないよう控えめに）
-        if (now - lastNote > 110) {
-          lastNote = now;
-          playDrop(noteFromY(p.y), 0.03 + fast * 0.06, 0);
         }
 
         // きらめきモード：なぞると光の粒子が散る
@@ -1278,6 +1293,13 @@
 
   function onUp(e) {
     delete pointers[e.pointerId];
+    // すべて離したら、次に触れた瞬間からまたリズムが始まる
+    var any = false;
+    for (var pid in pointers) {
+      any = true;
+      break;
+    }
+    if (!any) noteClock = 0;
   }
 
   canvas.addEventListener("pointerdown", onDown, { passive: true });
@@ -1300,10 +1322,14 @@
         b.classList.toggle("is-active", b === btn);
       });
       seedParticles();
-      // 曲はモードごとに変わる。頭から始めて、曲名をそっと知らせる
+      // 曲はモードごとに変わる。頭から始め、曲名表示＋出だしを自動で少し試聴
       noteIdx = 0;
       initAudio();
-      flashHint("♪ " + MELODIES[modeName].name, 1500);
+      flashHint("♪ " + MELODIES[modeName].name, 1600);
+      lastPlayX = W / 2;
+      lastPlayY = H * 0.42;
+      noteClock = 0;
+      previewLeft = 7; // 新しい曲の出だしが流れて、変わったのが分かる
     });
   });
 
