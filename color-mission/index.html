@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <title>カラーミッション</title>
+    <meta name="description" content="四方から流れてくる色玉を、タップや囲い込みで消すアクションゲーム。指定の色だけを狙い、レベルアップで囲い放題のボーナスタイムに突入する。" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="wrap">
+      <canvas id="game"></canvas>
+
+      <div class="hud">
+        <div class="box">
+          <div><span class="lbl">LV</span> <span id="lv" class="big">1</span><span id="tier">ブルーム</span></div>
+          <div id="lives"></div>
+        </div>
+        <div class="box" id="mission">
+          <div class="lbl">この色だけを消せ</div>
+          <div id="mrow">
+            <span id="swatch"></span>
+            <span id="mname"></span>
+            <span class="lbl">残り</span>
+            <span id="remain" class="big" style="font-size:clamp(15px,4.5vw,18px);">5</span>
+          </div>
+        </div>
+        <div class="box" style="text-align:right;">
+          <div class="lbl">SCORE</div>
+          <div id="total" class="big">0</div>
+        </div>
+      </div>
+
+      <div id="combo"><span id="comboText"></span></div>
+      <div id="hint"><span>ターゲット色だけを、タップ / 囲って消そう（違う色はライフ−1）</span></div>
+      <div id="banner"><div id="bannerText"></div></div>
+      <div id="bonus"><div id="bonusTitle">★ BONUS TIME ★ 囲い放題!</div><div id="bonusBarWrap"><div id="bonusBar"></div></div></div>
+
+      <div id="over">
+        <h1>GAME OVER</h1>
+        <div id="overStats"></div>
+        <button id="restart">もう一度遊ぶ</button>
+      </div>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
