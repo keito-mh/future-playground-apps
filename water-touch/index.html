@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>みずなぞり</title>
+    <meta
+      name="description"
+      content="指で画面をなぞると、水面が軌跡に沿ってスッとひらく。波紋・水しぶき・光の粒が広がる、触って気持ちいい水面体験。"
+    />
+    <meta name="theme-color" content="#06141f" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="wrap">
+      <canvas id="water"></canvas>
+
+      <!-- 初回の説明（最初のタッチで消える） -->
+      <div id="intro">
+        <div class="introInner">
+          <div class="drop"></div>
+          <p class="introText">なぞると、水がひらく</p>
+        </div>
+      </div>
+
+      <!-- 邪魔にならない位置のリセット -->
+      <button id="reset" aria-label="水面をしずめる" title="しずめる">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path
+            d="M12 3.2c-3.6 4-6 7-6 9.8a6 6 0 0 0 12 0c0-2.8-2.4-5.8-6-9.8z"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+
+      <!-- 画面下部のモード切替 -->
+      <div id="modes" role="tablist" aria-label="水の質感">
+        <button class="mode is-active" data-mode="clear">クリア</button>
+        <button class="mode" data-mode="flow">フロー</button>
+        <button class="mode" data-mode="jelly">ジェリー</button>
+        <button class="mode" data-mode="sparkle">きらめき</button>
+      </div>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>

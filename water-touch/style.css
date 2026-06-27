@@ -1,0 +1,141 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: #06141f;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Hiragino Sans", "Noto Sans JP", sans-serif;
+  color: #eaf6ff;
+  overscroll-behavior: none;
+}
+
+#wrap {
+  position: fixed;
+  inset: 0;
+}
+
+#water {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none; /* スクロールやピンチを無効化して、なぞりを最優先 */
+}
+
+/* ---- 初回説明 ---- */
+#intro {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: opacity 0.7s ease;
+  z-index: 5;
+}
+#intro.hide {
+  opacity: 0;
+}
+.introInner {
+  text-align: center;
+  transform: translateY(-6vh);
+}
+.introText {
+  font-size: clamp(18px, 5.6vw, 24px);
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.4);
+}
+.drop {
+  width: 30px;
+  height: 30px;
+  margin: 0 auto 18px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(45deg);
+  background: rgba(255, 255, 255, 0.18);
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  animation: bob 2.2s ease-in-out infinite;
+}
+@keyframes bob {
+  0%,
+  100% {
+    transform: rotate(45deg) translateY(0);
+  }
+  50% {
+    transform: rotate(45deg) translateY(-8px);
+  }
+}
+
+/* ---- リセット（右上・控えめ） ---- */
+#reset {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  right: 14px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 0.5px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: rgba(255, 255, 255, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 6;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+#reset:active {
+  transform: scale(0.9);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* ---- モード切替（下部・グラス調） ---- */
+#modes {
+  position: absolute;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 999px;
+  background: rgba(8, 22, 34, 0.42);
+  border: 0.5px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 6;
+}
+.mode {
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: clamp(12px, 3.6vw, 14px);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  padding: 9px 14px;
+  border-radius: 999px;
+  transition: color 0.18s ease, background 0.18s ease;
+}
+.mode.is-active {
+  color: #06141f;
+  background: rgba(255, 255, 255, 0.92);
+}
+.mode:active {
+  transform: scale(0.96);
+}
