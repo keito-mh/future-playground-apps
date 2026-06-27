@@ -115,6 +115,19 @@
   var grains = []; // 光の粒
   var leaves = []; // 葉っぱ
 
+  // ---- 育っていく世界（暗い水を、光で満たす）----
+  var life = 0; // 集めて咲かせた「いのち」の量（＝育ち具合）
+  var lifeStage = 0; // 節目の段階
+  var LIFE_FULL = 34; // この開花数で満開（夜明け・星空・水辺が満ちる）
+  var BLOOMS_PER_STAGE = 3; // この開花ごとに節目（新しい蓮や魚）
+  var MAX_LOTUS = 6;
+  var stars = []; // 水面にうつる星
+  var lotuses = []; // 育つ蓮
+  var fishes = []; // 泳ぎだす光の魚
+  function lifeFrac() {
+    return Math.min(1, life / LIFE_FULL);
+  }
+
   // ---- モード定義 ----
   // 見た目（色）だけでなく、触り心地・光の動き・音・遊びが変わる。
   // K/damping/spread/amb/spec : 水面の見た目と波の物理
@@ -208,6 +221,7 @@
     cstr = new Float32Array(cols * rows);
 
     seedParticles();
+    makeStars();
   }
 
   // ===================================================================
@@ -226,6 +240,61 @@
     // 最初から画面にいくつか散らし、残りは時間で縁から湧いて上限まで満ちる
     var nm = Math.round(maxMotes() * 0.6);
     for (var k = 0; k < nm; k++) motes.push(makeMote(rand(0, W), rand(0, H)));
+  }
+
+  // 星空（水面にうつる光）。位置は画面比率で持ち、リサイズに強い。
+  function makeStars() {
+    stars.length = 0;
+    var n = Math.round((W * H) / 9000); // 画面サイズに応じた数
+    for (var i = 0; i < n; i++) {
+      stars.push({
+        fx: Math.random(),
+        fy: Math.random() * 0.92,
+        r: rand(0.6, 1.8),
+        ph: rand(0, Math.PI * 2),
+        sp: rand(0.001, 0.0035),
+      });
+    }
+  }
+
+  // 育つ世界をまっさらに（リセット時）
+  function resetWorld() {
+    life = 0;
+    lifeStage = 0;
+    lotuses.length = 0;
+    fishes.length = 0;
+  }
+
+  // 蓮を一輪ふやす（節目ごと）
+  function addLotus() {
+    if (lotuses.length >= MAX_LOTUS) return;
+    lotuses.push({
+      fx: rand(0.1, 0.9),
+      base: rand(14, 22), // 大きさ
+      grow: 0, // 0→1 でひらく
+      hue: rand(310, 350), // やわらかい桃色
+      ph: rand(0, Math.PI * 2),
+    });
+  }
+
+  // 光の魚を一匹ふやす
+  function addFish() {
+    var dir = Math.random() < 0.5 ? 1 : -1;
+    fishes.push({
+      x: dir > 0 ? -30 : W + 30,
+      y: rand(H * 0.3, H * 0.85),
+      dir: dir,
+      sp: rand(0.4, 0.8),
+      ph: rand(0, Math.PI * 2),
+      amp: rand(10, 26),
+      len: rand(14, 22),
+    });
+  }
+
+  // 節目：水辺が一段ずつ育つ
+  function onStageUp() {
+    addLotus();
+    if (lifeStage >= 4 && fishes.length < 4) addFish();
   }
 
   // 集められる光の粒（指に引かれて集まり、たまると咲く）
@@ -381,6 +450,14 @@
     var spec = mode.spec;
     var fx = mode.flow.x;
     var fy = mode.flow.y;
+
+    // 育ち具合で水面の明るさが変わる：最初は暗い夜、満ちると明るい水辺。
+    var lb = 0.24 + 0.76 * lifeFrac();
+    topR *= lb; topG *= lb; topB *= lb;
+    botR *= lb; botG *= lb; botB *= lb;
+    var hl = 0.45 + 0.55 * lb; // ハイライト/きらめきは暗くても少し残す（月明かり）
+    hiR *= hl; hiG *= hl; hiB *= hl;
+    spec *= 0.4 + 0.6 * lb;
     // コースティクスの空間周波数（画面上の見た目が解像度で変わらないよう正規化）
     var nxf = 16 / cols;
     var nyf = 28 / rows;
@@ -463,6 +540,26 @@
   function updateAndDrawOverlay(dt) {
     var fx = mode.flow.x;
     var fy = mode.flow.y;
+    var lfrac = lifeFrac();
+
+    // --- 星空（育つほど数と明るさが増す。水面にうつる光）---
+    if (lfrac > 0.001) {
+      ctx.globalCompositeOperation = "lighter";
+      var shown = lfrac * stars.length;
+      for (var si = 0; si < stars.length; si++) {
+        var vis = shown - si; // 0→1 でだんだん現れる
+        if (vis <= 0) continue;
+        if (vis > 1) vis = 1;
+        var stx = stars[si];
+        stx.ph += stx.sp * dt;
+        var tw = 0.5 + 0.5 * Math.sin(stx.ph);
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(255,253,240," + vis * tw * 0.85 + ")";
+        ctx.arc(stx.fx * W, stx.fy * H, stx.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = "source-over";
+    }
 
     // --- 波紋リング ---
     ctx.lineCap = "round";
@@ -638,6 +735,14 @@
           firstBloom = true;
           onFirstBloom();
         }
+        // 咲かせるほど水辺が育つ
+        life++;
+        var st = Math.floor(life / BLOOMS_PER_STAGE);
+        if (st > lifeStage) {
+          lifeStage = st;
+          onStageUp();
+          showMilestone();
+        }
         // 何回かの開花ごとに、ランダムな特別演出
         bloomCount++;
         if (bloomCount >= nextSpecial) {
@@ -682,6 +787,27 @@
       }
     }
 
+    // --- 光の魚（育つと泳ぎだす）---
+    for (var fi = 0; fi < fishes.length; fi++) {
+      var fsh = fishes[fi];
+      fsh.ph += 0.004 * dt;
+      fsh.x += fsh.dir * fsh.sp * dt * 0.06;
+      var fy2 = fsh.y + Math.sin(fsh.ph) * fsh.amp;
+      if (fsh.dir > 0 && fsh.x > W + 40) fsh.x = -40;
+      if (fsh.dir < 0 && fsh.x < -40) fsh.x = W + 40;
+      var fgr = ctx.createRadialGradient(fsh.x, fy2, 0, fsh.x, fy2, fsh.len * 2);
+      fgr.addColorStop(0, "rgba(200,240,255,0.5)");
+      fgr.addColorStop(1, "rgba(200,240,255,0)");
+      ctx.fillStyle = fgr;
+      ctx.beginPath();
+      ctx.ellipse(fsh.x, fy2, fsh.len, fsh.len * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath(); // 芯
+      ctx.fillStyle = "rgba(240,252,255,0.85)";
+      ctx.ellipse(fsh.x, fy2, fsh.len * 0.4, fsh.len * 0.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.globalCompositeOperation = "source-over";
 
     // --- 葉っぱ ---
@@ -698,6 +824,47 @@
       wrap(lf);
       drawLeaf(lf);
     }
+
+    // --- 蓮（育つと水辺に咲く。下からひらく）---
+    for (var li2 = 0; li2 < lotuses.length; li2++) {
+      drawLotus(lotuses[li2], dt);
+    }
+  }
+
+  // 蓮を描く（pad＋ひらく花びら）。grow が 0→1 で開花。
+  function drawLotus(lo, dt) {
+    if (lo.grow < 1) lo.grow = Math.min(1, lo.grow + dt / 2200);
+    lo.ph += 0.0016 * dt;
+    var g = lo.grow;
+    var x = lo.fx * W;
+    var y = H - 96 - lo.base * 0.4; // モード切替バーの上に咲かせる
+    var s = lo.base * (0.4 + 0.6 * g);
+    var sway = Math.sin(lo.ph) * 2;
+    ctx.save();
+    ctx.translate(x + sway, y);
+    // 葉（pad）
+    ctx.beginPath();
+    ctx.ellipse(0, s * 0.5, s * 1.5, s * 0.5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "hsla(150,40%,40%,0.5)";
+    ctx.fill();
+    // 花びら（開く）
+    var petals = 7;
+    for (var p = 0; p < petals; p++) {
+      var ang = -Math.PI / 2 + (p - (petals - 1) / 2) * 0.42 * g;
+      ctx.save();
+      ctx.rotate(ang);
+      ctx.beginPath();
+      ctx.ellipse(0, -s * 0.7, s * 0.3, s * 0.8, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "hsla(" + lo.hue + ",65%,72%," + (0.45 + 0.4 * g) + ")";
+      ctx.fill();
+      ctx.restore();
+    }
+    // 芯
+    ctx.beginPath();
+    ctx.arc(0, -s * 0.3, s * 0.28, 0, Math.PI * 2);
+    ctx.fillStyle = "hsla(48,80%,72%,0.9)";
+    ctx.fill();
+    ctx.restore();
   }
 
   function wrap(p) {
@@ -744,21 +911,42 @@
     setTimeout(showGatherHint, 1100);
   }
 
+  var hintTimer = null;
+  function flashHint(text, ms) {
+    if (!hintEl) return;
+    if (hintP) hintP.textContent = text;
+    hintEl.classList.add("show");
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(function () {
+      hintEl.classList.remove("show");
+    }, ms);
+  }
+
   function showGatherHint() {
     if (gatherHintShown || firstBloom || !hintEl) return;
     gatherHintShown = true;
-    if (hintP) hintP.textContent = "ひかりを なぞって あつめよう";
+    if (hintP) hintP.textContent = "光をあつめて、水辺をそだてよう";
     hintEl.classList.add("show");
   }
 
-  // 最初の開花でチュートリアル完了
+  // 最初の開花：光がともる
   function onFirstBloom() {
-    if (!hintEl) return;
-    if (hintP) hintP.textContent = "あつまった！";
-    hintEl.classList.add("show");
-    setTimeout(function () {
-      hintEl.classList.remove("show");
-    }, 1500);
+    flashHint("ともった！", 1600);
+  }
+
+  // 節目：水辺が育ったことを短く伝える
+  var MILESTONES = [
+    "星がふえた",
+    "蓮がさいた",
+    "夜があけてくる",
+    "光の魚がめざめた",
+    "水辺がいきている",
+    "光であふれてきた",
+  ];
+  function showMilestone() {
+    if (!firstBloom) return; // 最初の案内とかぶらないように
+    var msg = MILESTONES[Math.min(lifeStage - 1, MILESTONES.length - 1)];
+    if (msg) flashHint(msg, 1500);
   }
 
   function pos(e) {
@@ -1053,6 +1241,7 @@
     pulse = 0;
     bloomCount = 0;
     nextSpecial = mode.specialBase;
+    resetWorld(); // 夜の水辺に戻し、また育て直せる
     seedParticles();
   });
 
