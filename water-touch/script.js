@@ -30,6 +30,50 @@
   var gctx = grid.getContext("2d");
   var gimg = null; // ImageData
 
+  // ---- カラー場（触れた場所からにじむ色）----
+  var chue = null; // 各セルの色相 (0..359)
+  var cstr = null; // 各セルの色の強さ (0..)
+  var COLOR_DECAY = 0.975; // 毎フレームの色の減衰（約1.5〜2秒で水色に戻る）
+
+  // 色相→RGB のルックアップテーブル（毎フレームの三角関数計算を避けて軽量化）
+  var HUE_LUT = new Float32Array(360 * 3);
+  (function buildHueLUT() {
+    for (var h = 0; h < 360; h++) {
+      // HSL(h, 85%, 55%) 相当のあざやかな色
+      var s = 0.85,
+        l = 0.55;
+      var c = (1 - Math.abs(2 * l - 1)) * s;
+      var hp = h / 60;
+      var xx = c * (1 - Math.abs((hp % 2) - 1));
+      var r1 = 0,
+        g1 = 0,
+        b1 = 0;
+      if (hp < 1) {
+        r1 = c;
+        g1 = xx;
+      } else if (hp < 2) {
+        r1 = xx;
+        g1 = c;
+      } else if (hp < 3) {
+        g1 = c;
+        b1 = xx;
+      } else if (hp < 4) {
+        g1 = xx;
+        b1 = c;
+      } else if (hp < 5) {
+        r1 = xx;
+        b1 = c;
+      } else {
+        r1 = c;
+        b1 = xx;
+      }
+      var m = l - c / 2;
+      HUE_LUT[h * 3] = (r1 + m) * 255;
+      HUE_LUT[h * 3 + 1] = (g1 + m) * 255;
+      HUE_LUT[h * 3 + 2] = (b1 + m) * 255;
+    }
+  })();
+
   // ---- オーバーレイのパーティクル ----
   var rings = []; // タップの波紋リング
   var splashes = []; // 水しぶきのしずく
@@ -137,6 +181,8 @@
     gimg = gctx.createImageData(cols, rows);
     cur = new Float32Array(cols * rows);
     prev = new Float32Array(cols * rows);
+    chue = new Float32Array(cols * rows);
+    cstr = new Float32Array(cols * rows);
 
     seedParticles();
   }
@@ -205,6 +251,30 @@
     }
   }
 
+  // 触れた場所に色を注入する。fade（減衰）で約1〜2秒かけて水色に戻る。
+  function inkBrush(px, py, strength, radPx, hue) {
+    var gx = (px / W) * cols;
+    var gy = (py / H) * rows;
+    var r = Math.max(1, (radPx / W) * cols);
+    var x0 = Math.max(0, Math.floor(gx - r));
+    var x1 = Math.min(cols - 1, Math.ceil(gx + r));
+    var y0 = Math.max(0, Math.floor(gy - r));
+    var y1 = Math.min(rows - 1, Math.ceil(gy + r));
+    for (var y = y0; y <= y1; y++) {
+      for (var x = x0; x <= x1; x++) {
+        var dx = x - gx;
+        var dy = y - gy;
+        var d = Math.sqrt(dx * dx + dy * dy);
+        if (d > r) continue;
+        var f = 1 - d / r;
+        var i = y * cols + x;
+        var ns = cstr[i] + strength * f * f;
+        cstr[i] = ns > 1.3 ? 1.3 : ns; // 上限で色飽和を抑える
+        chue[i] = hue; // 直近に触れた色を採用
+      }
+    }
+  }
+
   // 波の伝播（古典的なリップル法）
   function stepWater() {
     var sp = mode.spread;
@@ -263,6 +333,24 @@
         var i = y * cols + x;
         var xl = x > 0 ? -1 : 0;
         var xr = x < cols - 1 ? 1 : 0;
+
+        // 触れた場所の色を基本色に混ぜる（強さに応じてにじむ）。
+        // ここで減衰も行い、約1〜2秒で元の水色へ戻す。
+        var cR = bR,
+          cG = bG,
+          cB = bB;
+        var cs = cstr[i];
+        if (cs > 0.004) {
+          var li = (chue[i] | 0) * 3;
+          var t = (cs > 1 ? 1 : cs) * 0.8;
+          cR = bR + (HUE_LUT[li] - bR) * t;
+          cG = bG + (HUE_LUT[li + 1] - bG) * t;
+          cB = bB + (HUE_LUT[li + 2] - bB) * t;
+          cstr[i] = cs * COLOR_DECAY;
+        } else if (cs !== 0) {
+          cstr[i] = 0;
+        }
+
         // 高さの傾き＝疑似的な法線 → 光の当たり方
         var nx = cur[i + xl] - cur[i + xr];
         var ny = cur[i + yu] - cur[i + yd];
@@ -281,9 +369,9 @@
         var s4 = l2 * l2; // ハイライトの芯（よりシャープなきらめき）
 
         var p = i * 4;
-        var r = bR + hiR * light * 0.5 + 255 * s4 * spec - bR * dark * 0.45;
-        var g = bG + hiG * light * 0.5 + 255 * s4 * spec - bG * dark * 0.45;
-        var b = bB + hiB * light * 0.5 + 255 * s4 * spec - bB * dark * 0.45;
+        var r = cR + hiR * light * 0.5 + 255 * s4 * spec - cR * dark * 0.45;
+        var g = cG + hiG * light * 0.5 + 255 * s4 * spec - cG * dark * 0.45;
+        var b = cB + hiB * light * 0.5 + 255 * s4 * spec - cB * dark * 0.45;
         data[p] = r > 255 ? 255 : r < 0 ? 0 : r;
         data[p + 1] = g > 255 ? 255 : g < 0 ? 0 : g;
         data[p + 2] = b > 255 ? 255 : b < 0 ? 0 : b;
@@ -444,12 +532,20 @@
     return { x: e.clientX, y: e.clientY };
   }
 
+  // 触れた位置で色相が変わる（場所ごとに違う色／斜めになぞると虹色の軌跡）。
+  // 時間の項も少し混ぜて、同じ場所でもタップごとに表情が変わるように。
+  function hueAt(px, py, t) {
+    return (px * 0.55 + py * 0.32 + t * 0.05) % 360;
+  }
+
   function onDown(e) {
     dismissIntro();
     var p = pos(e);
-    pointers[e.pointerId] = { x: p.x, y: p.y, t: performance.now() };
-    // タップ：小さな波紋
+    var now = performance.now();
+    pointers[e.pointerId] = { x: p.x, y: p.y, t: now };
+    // タップ：小さな波紋＋触れた場所からにじむ色
     disturb(p.x, p.y, 5, 24);
+    inkBrush(p.x, p.y, 1.0, 34, hueAt(p.x, p.y, now));
     rings.push({
       x: p.x,
       y: p.y,
@@ -479,11 +575,14 @@
         var fast = Math.min(1, speed / 1.6);
         var amp = 3 + fast * 6;
         var radPx = 32 - fast * 16; // ゆっくり=広く、速い=細く
-        // 軌跡に沿って補間しながら水面をひらく
+        // 軌跡に沿って補間しながら水面をひらき、色も流し込む
         var steps = Math.max(1, Math.ceil(dist / 6));
         for (var s = 1; s <= steps; s++) {
           var t = s / steps;
-          disturb(pr.x + dx * t, pr.y + dy * t, amp, radPx);
+          var sx = pr.x + dx * t;
+          var sy = pr.y + dy * t;
+          disturb(sx, sy, amp, radPx);
+          inkBrush(sx, sy, 0.5, radPx + 6, hueAt(sx, sy, now));
         }
 
         if (fast > 0.45) {
@@ -553,6 +652,7 @@
     // 水面をやさしくしずめる
     cur.fill(0);
     prev.fill(0);
+    cstr.fill(0);
     rings.length = 0;
     splashes.length = 0;
     streaks.length = 0;
