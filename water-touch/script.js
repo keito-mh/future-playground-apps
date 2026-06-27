@@ -103,6 +103,10 @@
   var mode = MODES.clear;
   var modeName = "clear";
 
+  // 1フレームあたりの物理サブステップ数。
+  // 格子を細かくすると波が遅く見えるため、複数ステップで伝播速度（触感）を保つ。
+  var SUBSTEPS = 2;
+
   // ===================================================================
   // リサイズ / グリッド初期化
   // ===================================================================
@@ -117,10 +121,17 @@
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.imageSmoothingEnabled = true;
 
-    // グリッド解像度：1セル ≒ 10px、軽さ重視で上限を設定
-    var cell = 10;
-    cols = Math.max(24, Math.min(64, Math.round(W / cell)));
-    rows = Math.max(36, Math.round(cols * (H / W)));
+    // グリッド解像度：1セル ≒ 5px で細かく（高解像度）。
+    // ただし総セル数に上限を設け、古い端末でも軽く保つ。
+    var cell = 5;
+    cols = Math.max(48, Math.min(160, Math.round(W / cell)));
+    rows = Math.max(80, Math.round(cols * (H / W)));
+    var maxCells = 22000;
+    if (cols * rows > maxCells) {
+      var sc = Math.sqrt(maxCells / (cols * rows));
+      cols = Math.round(cols * sc);
+      rows = Math.round(rows * sc);
+    }
     grid.width = cols;
     grid.height = rows;
     gimg = gctx.createImageData(cols, rows);
@@ -173,10 +184,11 @@
   // 水面をなぞる / たたく
   // ===================================================================
   // 高さ場へへこみを与える。amp が大きいほど大きな波。
-  function disturb(px, py, amp, rad) {
+  // radPx は画面ピクセル単位の筆の半径（解像度が変わってもブラシの大きさは一定）。
+  function disturb(px, py, amp, radPx) {
     var gx = (px / W) * cols;
     var gy = (py / H) * rows;
-    var r = Math.max(1, rad);
+    var r = Math.max(1, (radPx / W) * cols);
     var x0 = Math.max(1, Math.floor(gx - r));
     var x1 = Math.min(cols - 2, Math.ceil(gx + r));
     var y0 = Math.max(1, Math.floor(gy - r));
@@ -196,7 +208,9 @@
   // 波の伝播（古典的なリップル法）
   function stepWater() {
     var sp = mode.spread;
-    var damp = mode.damping;
+    // サブステップで回す分、1ステップあたりの減衰を弱めて
+    // フレーム全体での「約1〜2秒で戻る」感を保つ。
+    var damp = Math.pow(mode.damping, 1 / SUBSTEPS);
     for (var y = 1; y < rows - 1; y++) {
       var row = y * cols;
       for (var x = 1; x < cols - 1; x++) {
@@ -226,11 +240,16 @@
     var hiR = mode.hi[0],
       hiG = mode.hi[1],
       hiB = mode.hi[2];
-    var K = mode.K;
+    // 陰影の強さは解像度に追従させる（格子を細かくしても隣との
+    // 高さ差が小さくなる分をスケールで補い、コントラストを保つ）。
+    var K = mode.K * (cols / 40);
     var amb = mode.amb;
     var spec = mode.spec;
     var fx = mode.flow.x;
     var fy = mode.flow.y;
+    // コースティクスの空間周波数（画面上の見た目が解像度で変わらないよう正規化）
+    var nxf = 16 / cols;
+    var nyf = 28 / rows;
 
     for (var y = 0; y < rows; y++) {
       var vy = y / (rows - 1);
@@ -248,22 +267,23 @@
         var nx = cur[i + xl] - cur[i + xr];
         var ny = cur[i + yu] - cur[i + yd];
         var shade = (nx * 0.7 + ny) * K;
-        // アイドル時のやわらかなゆらぎ（流れる方向にスクロール）
+        // アイドル時のやわらかなゆらぎ（解像度に依らない周波数でスクロール）
         shade +=
-          Math.sin(x * 0.4 + now * 0.0014 + fx * now * 0.02) *
-          Math.cos(y * 0.35 - now * 0.0011 + fy * now * 0.02) *
+          Math.sin(nxf * x + now * 0.0014 + fx * now * 0.02) *
+          Math.cos(nyf * y - now * 0.0011 + fy * now * 0.02) *
           amb;
         if (shade > 1) shade = 1;
         else if (shade < -1) shade = -1;
 
         var light = shade > 0 ? shade : 0;
         var dark = shade < 0 ? -shade : 0;
-        var s3 = light * light * light; // ハイライトの芯
+        var l2 = light * light;
+        var s4 = l2 * l2; // ハイライトの芯（よりシャープなきらめき）
 
         var p = i * 4;
-        var r = bR + hiR * light * 0.5 + 255 * s3 * spec - bR * dark * 0.45;
-        var g = bG + hiG * light * 0.5 + 255 * s3 * spec - bG * dark * 0.45;
-        var b = bB + hiB * light * 0.5 + 255 * s3 * spec - bB * dark * 0.45;
+        var r = bR + hiR * light * 0.5 + 255 * s4 * spec - bR * dark * 0.45;
+        var g = bG + hiG * light * 0.5 + 255 * s4 * spec - bG * dark * 0.45;
+        var b = bB + hiB * light * 0.5 + 255 * s4 * spec - bB * dark * 0.45;
         data[p] = r > 255 ? 255 : r < 0 ? 0 : r;
         data[p + 1] = g > 255 ? 255 : g < 0 ? 0 : g;
         data[p + 2] = b > 255 ? 255 : b < 0 ? 0 : b;
@@ -429,7 +449,7 @@
     var p = pos(e);
     pointers[e.pointerId] = { x: p.x, y: p.y, t: performance.now() };
     // タップ：小さな波紋
-    disturb(p.x, p.y, 7, 2.2);
+    disturb(p.x, p.y, 5, 24);
     rings.push({
       x: p.x,
       y: p.y,
@@ -457,13 +477,13 @@
       if (dist > 0.5) {
         // 速いほど強い波・細い軌跡、ゆっくりは広くやわらかく分かれる
         var fast = Math.min(1, speed / 1.6);
-        var amp = 5 + fast * 9;
-        var rad = 3.2 - fast * 1.4;
+        var amp = 3 + fast * 6;
+        var radPx = 32 - fast * 16; // ゆっくり=広く、速い=細く
         // 軌跡に沿って補間しながら水面をひらく
-        var steps = Math.max(1, Math.ceil(dist / 8));
+        var steps = Math.max(1, Math.ceil(dist / 6));
         for (var s = 1; s <= steps; s++) {
           var t = s / steps;
-          disturb(pr.x + dx * t, pr.y + dy * t, amp, rad);
+          disturb(pr.x + dx * t, pr.y + dy * t, amp, radPx);
         }
 
         if (fast > 0.45) {
@@ -546,7 +566,7 @@
   function loop(now) {
     var dt = Math.min(40, now - last); // 大きすぎるステップを抑制
     last = now;
-    stepWater();
+    for (var s = 0; s < SUBSTEPS; s++) stepWater();
     renderWater(now);
     updateAndDrawOverlay(dt);
     requestAnimationFrame(loop);
