@@ -104,6 +104,42 @@ body {
   background: rgba(255, 255, 255, 0.16);
 }
 
+/* ---- 音のオン/オフ（左上・控えめ） ---- */
+#sound {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  left: 14px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 0.5px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: rgba(255, 255, 255, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 6;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+#sound:active {
+  transform: scale(0.9);
+  background: rgba(255, 255, 255, 0.16);
+}
+#sound .slash {
+  display: none;
+}
+#sound.muted {
+  color: rgba(255, 255, 255, 0.4);
+}
+#sound.muted .wave {
+  display: none;
+}
+#sound.muted .slash {
+  display: inline;
+}
+
 /* ---- モード切替（下部・グラス調） ---- */
 #modes {
   position: absolute;

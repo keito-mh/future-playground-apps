@@ -35,6 +35,27 @@
   var cstr = null; // 各セルの色の強さ (0..)
   var COLOR_DECAY = 0.975; // 毎フレームの色の減衰（約1.5〜2秒で水色に戻る）
 
+  // ---- 波紋リズム（タップでハマると共鳴する、やさしい遊び）----
+  var actx = null,
+    master = null,
+    muted = false;
+  var lastTap = 0, // 直近タップ時刻
+    beatIv = 0, // 直近のタップ間隔（テンポ）
+    resonance = 0, // 共鳴レベル（リズムが続くほど上がる）
+    beatX = 0,
+    beatY = 0,
+    pulse = 0; // オンビート時の全体のきらめき
+  // ペンタトニック音階の周波数（どう叩いても濁らない＝瞑想的）
+  var PENTA = [];
+  (function () {
+    var base = 523.25; // C5
+    var semis = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28];
+    for (var i = 0; i < semis.length; i++) {
+      PENTA.push(base * Math.pow(2, semis[i] / 12));
+    }
+  })();
+  var RES_MAX = PENTA.length - 1;
+
   // 色相→RGB のルックアップテーブル（毎フレームの三角関数計算を避けて軽量化）
   var HUE_LUT = new Float32Array(360 * 3);
   (function buildHueLUT() {
@@ -411,12 +432,51 @@
       }
       var pr = 1 - rg.life / rg.max;
       var radius = rg.r0 + (rg.r1 - rg.r0) * pr;
-      var a = (1 - pr) * 0.28;
+      var a = (1 - pr) * (rg.glow || 0.28);
       ctx.beginPath();
       ctx.strokeStyle = "rgba(235,250,255," + a + ")";
       ctx.lineWidth = 1.5 * (1 - pr) + 0.5;
       ctx.arc(rg.x, rg.y, radius, 0, Math.PI * 2);
       ctx.stroke();
+    }
+
+    // --- 共鳴の全体のきらめき（オンビートでふわっと光る）---
+    if (pulse > 0.01) {
+      var gp = ctx.createRadialGradient(
+        beatX,
+        beatY,
+        0,
+        beatX,
+        beatY,
+        Math.max(W, H) * 0.7
+      );
+      gp.addColorStop(0, "rgba(255,255,255," + pulse * 0.12 + ")");
+      gp.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = gp;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = "source-over";
+      pulse *= 0.9;
+    } else {
+      pulse = 0;
+    }
+
+    // --- テンポのガイドリング（次の拍に向かって静かに広がる）---
+    if (resonance >= 2 && beatIv) {
+      var since = performance.now() - lastTap;
+      if (since < beatIv * 1.7) {
+        var bp = since / beatIv; // 0→1 で次の拍
+        if (bp <= 1) {
+          ctx.beginPath();
+          ctx.strokeStyle = "rgba(255,255,255," + 0.16 * bp + ")";
+          ctx.lineWidth = 1;
+          ctx.arc(beatX, beatY, 8 + bp * 46, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else {
+        resonance = 0; // テンポが途切れた＝グルーヴ終了
+        beatIv = 0;
+      }
     }
 
     // --- 白い筋（速いなぞり） ---
@@ -538,21 +598,101 @@
     return (px * 0.55 + py * 0.32 + t * 0.05) % 360;
   }
 
+  // ===================================================================
+  // 音（Web Audio で水滴音を合成。音源ファイル不要で軽い）
+  // ===================================================================
+  function initAudio() {
+    if (actx) {
+      if (actx.state === "suspended") actx.resume();
+      return;
+    }
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      actx = new AC();
+      master = actx.createGain();
+      master.gain.value = 0.55;
+      master.connect(actx.destination);
+    } catch (e) {
+      actx = null;
+    }
+  }
+
+  // 水滴のような澄んだ音。step が高いほど高音（共鳴で上がっていく）。
+  function playDrop(step, strong) {
+    if (!actx || muted) return;
+    var t = actx.currentTime;
+    var idx = step < 0 ? 0 : step >= PENTA.length ? PENTA.length - 1 : step;
+    var freq = PENTA[idx];
+    var peak = strong ? 0.5 : 0.34;
+
+    var o = actx.createOscillator();
+    o.type = "sine";
+    var g = actx.createGain();
+    o.frequency.setValueAtTime(freq * 1.5, t); // 一瞬高く→落ちる＝水滴感
+    o.frequency.exponentialRampToValueAtTime(freq, t + 0.05);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+    o.connect(g);
+    g.connect(master);
+    o.start(t);
+    o.stop(t + 0.62);
+
+    // やわらかい倍音をひと粒
+    var o2 = actx.createOscillator();
+    o2.type = "sine";
+    var g2 = actx.createGain();
+    o2.frequency.setValueAtTime(freq * 2, t);
+    g2.gain.setValueAtTime(0.0001, t);
+    g2.gain.exponentialRampToValueAtTime(peak * 0.22, t + 0.006);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    o2.connect(g2);
+    g2.connect(master);
+    o2.start(t);
+    o2.stop(t + 0.24);
+  }
+
   function onDown(e) {
     dismissIntro();
+    initAudio(); // タッチ（ユーザー操作）で音を有効化
     var p = pos(e);
     var now = performance.now();
     pointers[e.pointerId] = { x: p.x, y: p.y, t: now };
-    // タップ：小さな波紋＋触れた場所からにじむ色
-    disturb(p.x, p.y, 3, 24);
+
+    // --- リズム判定（一定テンポで重ねると共鳴。外しても罰なし）---
+    var onBeat = false;
+    if (lastTap) {
+      var iv = now - lastTap;
+      if (iv >= 180 && iv <= 1200) {
+        if (beatIv && Math.abs(iv - beatIv) / beatIv < 0.3) {
+          resonance = Math.min(RES_MAX, resonance + 1); // テンポが続いた
+          onBeat = true;
+        } else {
+          resonance = 1; // グルーヴを切り直す（やさしく）
+        }
+        beatIv = iv;
+      } else {
+        resonance = 0; // 速すぎ／間が空きすぎ
+        beatIv = 0;
+      }
+    }
+    lastTap = now;
+    beatX = p.x;
+    beatY = p.y;
+    playDrop(resonance, onBeat);
+    if (onBeat) pulse = Math.min(1, 0.35 + resonance / RES_MAX);
+
+    // タップ：波紋＋にじむ色。共鳴しているほど波紋は大きく明るく。
+    disturb(p.x, p.y, 3 + resonance * 0.5, 24);
     inkBrush(p.x, p.y, 0.8, 34, hueAt(p.x, p.y, now));
     rings.push({
       x: p.x,
       y: p.y,
       r0: 4,
-      r1: 60,
-      life: 700,
-      max: 700,
+      r1: 60 + resonance * 22,
+      life: 700 + resonance * 70,
+      max: 700 + resonance * 70,
+      glow: onBeat ? 0.32 + (resonance / RES_MAX) * 0.5 : 0.28,
     });
   }
 
@@ -656,7 +796,19 @@
     rings.length = 0;
     splashes.length = 0;
     streaks.length = 0;
+    resonance = 0;
+    beatIv = 0;
+    pulse = 0;
     seedParticles();
+  });
+
+  // 音のオン/オフ
+  var soundBtn = document.getElementById("sound");
+  soundBtn.addEventListener("click", function () {
+    initAudio(); // 操作のタイミングで音を有効化
+    muted = !muted;
+    soundBtn.classList.toggle("muted", muted);
+    soundBtn.setAttribute("aria-pressed", String(!muted));
   });
 
   // ===================================================================
