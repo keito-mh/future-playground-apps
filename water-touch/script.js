@@ -51,7 +51,7 @@
   var spawnTimer = 0; // 光がわき続けるためのタイマー
   var SPAWN_IV = 300; // 約0.3秒ごとに縁から1粒ふえる
   function maxMotes() {
-    return modeName === "sparkle" ? 40 : 32;
+    return mode.cap;
   }
   var firstBloom = false; // チュートリアル進行用
 
@@ -116,66 +116,55 @@
   var leaves = []; // 葉っぱ
 
   // ---- モード定義 ----
-  // K        : 波のコントラスト（明暗の強さ）
-  // damping  : 波の減衰（小さいほど早く静まる）— 約1〜2秒で戻る
-  // spread   : 波の伝わる速さ（小さいほど重い）
-  // amb      : アイドル時のゆらぎ（コースティクス）
-  // flow     : 一定方向の流れ {x, y}（px/フレーム相当）
-  // top/bot  : 上端/下端の基本色 [r,g,b]
-  // hi       : ハイライト色 [r,g,b]
-  // grains   : 光の粒の数 / leaves: 葉っぱの数
+  // 見た目（色）だけでなく、触り心地・光の動き・音・遊びが変わる。
+  // K/damping/spread/amb/spec : 水面の見た目と波の物理
+  // flow      : 一定方向の流れ {x, y}（px/フレーム）
+  // ampMul    : なぞり/タップの波の強さ倍率（ジェリーは大きく重く）
+  // moteDamp  : 光の粒の減衰（大きいほど粘って遅い＝重い）
+  // pullMul   : 光が指に寄る強さ倍率
+  // cap       : 光の最大数 / spawnMul: 湧く速さ倍率
+  // specialBase : 何回の開花ごとに特別演出（小さいほど頻繁）
+  // glint     : なぞると光の粒子が散るか（きらめき）
+  // wave/pitch/bell : 音色（波形・音程倍率・倍音の強さ）
   var MODES = {
     clear: {
-      K: 0.12,
-      damping: 0.955,
-      spread: 0.5,
-      amb: 0.035,
+      K: 0.12, damping: 0.955, spread: 0.5, amb: 0.035, spec: 0.18,
       flow: { x: 0, y: 0 },
-      top: [96, 188, 222],
-      bot: [26, 78, 118],
-      hi: [206, 234, 246],
-      spec: 0.18,
-      grains: 14,
-      leaves: 4,
+      ampMul: 1, moteDamp: 0.85, pullMul: 1,
+      cap: 32, spawnMul: 1, specialBase: 5, glint: false,
+      wave: "sine", pitch: 1, bell: 0.22,
+      top: [96, 188, 222], bot: [26, 78, 118], hi: [206, 234, 246],
+      grains: 14, leaves: 4,
     },
     flow: {
-      K: 0.11,
-      damping: 0.965,
-      spread: 0.5,
-      amb: 0.045,
-      flow: { x: 0.18, y: 0.06 },
-      top: [108, 204, 192],
-      bot: [28, 92, 96],
-      hi: [212, 240, 232],
-      spec: 0.16,
-      grains: 18,
-      leaves: 6,
+      // 流れる水：光も葉もぐんぐん流れ、止まると流される
+      K: 0.11, damping: 0.965, spread: 0.5, amb: 0.05, spec: 0.16,
+      flow: { x: 1.0, y: 0.32 },
+      ampMul: 0.95, moteDamp: 0.9, pullMul: 0.9,
+      cap: 32, spawnMul: 1.1, specialBase: 5, glint: false,
+      wave: "sine", pitch: 0.94, bell: 0.16,
+      top: [108, 204, 192], bot: [28, 92, 96], hi: [212, 240, 232],
+      grains: 18, leaves: 7,
     },
     jelly: {
-      K: 0.14,
-      damping: 0.984, // 長めに揺れて、ぷるっと戻る
-      spread: 0.46, // 重め
-      amb: 0.03,
+      // 重くてぷるぷる：ゆっくり長く揺れ、光の寄りも粘る
+      K: 0.15, damping: 0.988, spread: 0.4, amb: 0.028, spec: 0.24,
       flow: { x: 0, y: 0 },
-      top: [156, 158, 232],
-      bot: [66, 56, 122],
-      hi: [226, 222, 244],
-      spec: 0.24,
-      grains: 12,
-      leaves: 3,
+      ampMul: 1.5, moteDamp: 0.93, pullMul: 0.62,
+      cap: 24, spawnMul: 0.85, specialBase: 6, glint: false,
+      wave: "triangle", pitch: 0.6, bell: 0.1,
+      top: [156, 158, 232], bot: [66, 56, 122], hi: [226, 222, 244],
+      grains: 12, leaves: 3,
     },
     sparkle: {
-      K: 0.13,
-      damping: 0.95,
-      spread: 0.5,
-      amb: 0.045,
-      flow: { x: 0.04, y: -0.05 },
-      top: [220, 168, 208],
-      bot: [84, 56, 108],
-      hi: [240, 230, 220],
-      spec: 0.34,
-      grains: 40,
-      leaves: 3,
+      // 光がたくさん速く湧き、なぞると粒子が散る／特別演出も出やすい
+      K: 0.13, damping: 0.95, spread: 0.5, amb: 0.045, spec: 0.36,
+      flow: { x: 0.05, y: -0.06 },
+      ampMul: 0.95, moteDamp: 0.82, pullMul: 1.15,
+      cap: 48, spawnMul: 1.8, specialBase: 3, glint: true,
+      wave: "sine", pitch: 1.5, bell: 0.5,
+      top: [220, 168, 208], bot: [84, 56, 108], hi: [240, 230, 220],
+      grains: 40, leaves: 3,
     },
   };
   var mode = MODES.clear;
@@ -250,6 +239,21 @@
       ph: rand(0, Math.PI * 2),
       sp: rand(0.003, 0.006),
     };
+  }
+
+  // きらめきの粒子（なぞり・タップで散る小さな光）
+  function sparkleBurst(x, y, n) {
+    for (var i = 0; i < n; i++) {
+      splashes.push({
+        x: x + rand(-10, 10),
+        y: y + rand(-10, 10),
+        vx: rand(-0.04, 0.04),
+        vy: rand(-0.06, 0.02),
+        r: rand(0.8, 1.8),
+        life: rand(400, 800),
+        max: 800,
+      });
+    }
   }
 
   // 画面の縁から新しい光が流れ込む（開花で消えた分の補充）
@@ -417,8 +421,8 @@
         var shade = (nx * 0.7 + ny) * K;
         // アイドル時のやわらかなゆらぎ（解像度に依らない周波数でスクロール）
         shade +=
-          Math.sin(nxf * x + now * 0.0014 + fx * now * 0.02) *
-          Math.cos(nyf * y - now * 0.0011 + fy * now * 0.02) *
+          Math.sin(nxf * x + now * 0.0014 + fx * now * 0.004) *
+          Math.cos(nyf * y - now * 0.0011 + fy * now * 0.004) *
           amb;
         if (shade > 1) shade = 1;
         else if (shade < -1) shade = -1;
@@ -562,8 +566,9 @@
     // 光は時間とともに縁から湧き続ける（上限まで補充）。集めなくても絶えない。
     spawnTimer += dt;
     var cap = maxMotes();
-    while (spawnTimer >= SPAWN_IV) {
-      spawnTimer -= SPAWN_IV;
+    var iv = SPAWN_IV / mode.spawnMul; // モードで湧く速さが変わる
+    while (spawnTimer >= iv) {
+      spawnTimer -= iv;
       if (motes.length < cap) motes.push(spawnEdgeMote());
     }
 
@@ -578,13 +583,13 @@
         var ay = pl[pi].y - mt.y;
         var ad = Math.sqrt(ax * ax + ay * ay) + 0.001;
         if (ad < PULL_R) {
-          var acc = 0.6 * (1 - ad / PULL_R) * Math.min(1, ad / 40);
+          var acc = 0.6 * mode.pullMul * (1 - ad / PULL_R) * Math.min(1, ad / 40);
           mt.vx += (ax / ad) * acc;
           mt.vy += (ay / ad) * acc;
         }
       }
-      mt.vx *= 0.85;
-      mt.vy *= 0.85;
+      mt.vx *= mode.moteDamp;
+      mt.vy *= mode.moteDamp;
       mt.x += mt.vx * dt * 0.08 + fx;
       mt.y += mt.vy * dt * 0.08 + fy;
       wrap(mt);
@@ -636,7 +641,7 @@
         // 何回かの開花ごとに、ランダムな特別演出
         bloomCount++;
         if (bloomCount >= nextSpecial) {
-          nextSpecial = bloomCount + 5 + Math.floor(rand(0, 5));
+          nextSpecial = bloomCount + mode.specialBase + Math.floor(rand(0, 5));
           fireSpecial(cx, cy);
         }
       }
@@ -790,11 +795,11 @@
     if (!actx || muted || vol <= 0) return;
     var t = actx.currentTime + (delay || 0);
     var idx = step < 0 ? 0 : step >= PENTA.length ? PENTA.length - 1 : step | 0;
-    var freq = PENTA[idx];
+    var freq = PENTA[idx] * mode.pitch; // モードで音程が変わる
     var peak = vol;
 
     var o = actx.createOscillator();
-    o.type = "sine";
+    o.type = mode.wave; // モードで音色が変わる
     var g = actx.createGain();
     o.frequency.setValueAtTime(freq * 1.5, t); // 一瞬高く→落ちる＝水滴感
     o.frequency.exponentialRampToValueAtTime(freq, t + 0.05);
@@ -806,18 +811,18 @@
     o.start(t);
     o.stop(t + 0.62);
 
-    // やわらかい倍音をひと粒
+    // 倍音（モードで強さが変わる＝鈴のよう／まるい音に）
     var o2 = actx.createOscillator();
     o2.type = "sine";
     var g2 = actx.createGain();
-    o2.frequency.setValueAtTime(freq * 2, t);
+    o2.frequency.setValueAtTime(freq * (mode.bell > 0.3 ? 3 : 2), t);
     g2.gain.setValueAtTime(0.0001, t);
-    g2.gain.exponentialRampToValueAtTime(peak * 0.22, t + 0.006);
-    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    g2.gain.exponentialRampToValueAtTime(peak * mode.bell, t + 0.006);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
     o2.connect(g2);
     g2.connect(master);
     o2.start(t);
-    o2.stop(t + 0.24);
+    o2.stop(t + 0.27);
   }
 
   // 開花の和音（必ず調和する3音）
@@ -920,9 +925,10 @@
     pointers[e.pointerId] = { x: p.x, y: p.y, t: now };
 
     // タップ：波紋＋にじむ色＋やさしい水滴音（高さで音程が変わる）
-    disturb(p.x, p.y, 3, 24);
+    disturb(p.x, p.y, 3 * mode.ampMul, 24);
     inkBrush(p.x, p.y, 0.8, 34, hueAt(p.x, p.y, now));
     playDrop(noteFromY(p.y), 0.34, 0);
+    if (mode.glint) sparkleBurst(p.x, p.y, 4);
     rings.push({
       x: p.x,
       y: p.y,
@@ -951,7 +957,7 @@
       if (dist > 0.5) {
         // 速いほど強い波・細い軌跡、ゆっくりは広くやわらかく分かれる
         var fast = Math.min(1, speed / 1.6);
-        var amp = 1.6 + fast * 3;
+        var amp = (1.6 + fast * 3) * mode.ampMul;
         var radPx = 32 - fast * 16; // ゆっくり=広く、速い=細く
         // 軌跡に沿って補間しながら水面をひらき、色も流し込む
         var steps = Math.max(1, Math.ceil(dist / 6));
@@ -968,6 +974,9 @@
           lastNote = now;
           playDrop(noteFromY(p.y), 0.05 + fast * 0.13, 0);
         }
+
+        // きらめきモード：なぞると光の粒子が散る
+        if (mode.glint && Math.random() < 0.6) sparkleBurst(p.x, p.y, 1);
 
         if (fast > 0.6) {
           // 速い：やわらかな白い筋
@@ -1043,7 +1052,7 @@
     blooms.length = 0;
     pulse = 0;
     bloomCount = 0;
-    nextSpecial = 5;
+    nextSpecial = mode.specialBase;
     seedParticles();
   });
 
