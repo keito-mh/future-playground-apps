@@ -71,33 +71,39 @@
 
   // ---- メロディ（著作権フリー＝パブリックドメインの曲のみ）----
   // 開花するたびに次の音符が鳴る。曲のリズムで咲かせると、その曲になる。
-  // 数字は C(=0) からの半音。みんなが知っている曲なので、自然と合わせられる。
+  // 曲はモードごとに変わる（計4曲）。数字は C(=0) からの半音。
   var MELODY_BASE = 523.25; // C5
-  var MELODIES = [
-    {
+  var MELODIES = {
+    clear: {
       name: "きらきらぼし",
       notes: [
         0, 0, 7, 7, 9, 9, 7, 5, 5, 4, 4, 2, 2, 0, 7, 7, 5, 5, 4, 4, 2, 7, 7, 5,
         5, 4, 4, 2, 0, 0, 7, 7, 9, 9, 7, 5, 5, 4, 4, 2, 2, 0,
       ],
     },
-    {
+    flow: {
+      name: "かえるのうた",
+      notes: [
+        0, 2, 4, 5, 4, 2, 0, 4, 5, 7, 9, 7, 5, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
+        4, 5, 4, 2, 0,
+      ],
+    },
+    jelly: {
       name: "メリーさんのひつじ",
       notes: [
         4, 2, 0, 2, 4, 4, 4, 2, 2, 2, 4, 7, 7, 4, 2, 0, 2, 4, 4, 4, 4, 2, 2, 4,
         2, 0,
       ],
     },
-    {
+    sparkle: {
       name: "よろこびの歌",
       notes: [
         4, 4, 5, 7, 7, 5, 4, 2, 0, 0, 2, 4, 4, 2, 2, 4, 4, 5, 7, 7, 5, 4, 2, 0,
         0, 2, 4, 2, 0, 0,
       ],
     },
-  ];
-  var melodyIdx = 0,
-    noteIdx = 0;
+  };
+  var noteIdx = 0; // 今のモードの曲の、次に鳴らす音符
 
   // 色相→RGB のルックアップテーブル（毎フレームの三角関数計算を避けて軽量化）
   var HUE_LUT = new Float32Array(360 * 3);
@@ -959,9 +965,9 @@
     hintEl.classList.add("show");
   }
 
-  // 最初の開花：光がともり、最初の曲名をそっと知らせる
+  // 最初の開花：光がともり、曲名をそっと知らせる
   function onFirstBloom() {
-    flashHint("♪ " + MELODIES[melodyIdx].name, 1700);
+    flashHint("♪ " + MELODIES[modeName].name, 1700);
   }
 
   // 節目：水辺が育ったことを短く伝える
@@ -1086,16 +1092,12 @@
     o2.stop(t + 0.47);
   }
 
-  // 開花のたびに、曲の次の音符を鳴らす。曲のリズムで咲かせると、その曲になる。
+  // 開花のたびに、今のモードの曲の次の音符を鳴らす。
+  // 曲のリズムで咲かせると、その曲になる。曲はモードチェンジで変わる。
   function playMelodyNote() {
-    var song = MELODIES[melodyIdx];
-    if (noteIdx === 0 && firstBloom) flashHint("♪ " + song.name, 1500);
+    var song = MELODIES[modeName];
     playNote(song.notes[noteIdx], 0.4);
-    noteIdx++;
-    if (noteIdx >= song.notes.length) {
-      noteIdx = 0;
-      melodyIdx = (melodyIdx + 1) % MELODIES.length; // 次の曲へ
-    }
+    noteIdx = (noteIdx + 1) % song.notes.length; // 最後までいったら頭から
   }
 
   // ===================================================================
@@ -1298,6 +1300,10 @@
         b.classList.toggle("is-active", b === btn);
       });
       seedParticles();
+      // 曲はモードごとに変わる。頭から始めて、曲名をそっと知らせる
+      noteIdx = 0;
+      initAudio();
+      flashHint("♪ " + MELODIES[modeName].name, 1500);
     });
   });
 
@@ -1313,7 +1319,6 @@
     pulse = 0;
     bloomCount = 0;
     nextSpecial = mode.specialBase;
-    melodyIdx = 0;
     noteIdx = 0;
     resetWorld(); // 夜の水辺に戻し、また育て直せる
     seedParticles();
