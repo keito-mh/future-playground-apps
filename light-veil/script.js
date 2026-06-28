@@ -30,6 +30,14 @@ const toastEl = document.getElementById("toast");
 const bg = document.createElement("canvas");
 const bgctx = bg.getContext("2d", { alpha: false });
 
+// ---- 光バッファ＆ブルーム（AAA風の発光）----
+const lightC = document.createElement("canvas");      // 光だけを描く層（全解像度）
+const lcx = lightC.getContext("2d");
+const bloomC = document.createElement("canvas");       // 低解像度ブルーム
+const bcx = bloomC.getContext("2d");
+let BW = 0, BH = 0;
+let vignette = null;                                   // 光を際立たせる周辺減光
+
 // ---- 状態 ----
 let W = 0, H = 0, DPR = 1;
 let sourceMode = "camera"; // "camera" | "photo"
@@ -70,6 +78,41 @@ function getGlow(hue) {
   return glowCache[key];
 }
 
+// きらめき（star flare）：白い十字の光条＋中心。色は重ねる側に任せる
+const flareSprite = (() => {
+  const size = 256, c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d"), r = size / 2;
+  g.translate(r, r);
+  let rg = g.createRadialGradient(0, 0, 0, 0, 0, r * 0.5);
+  rg.addColorStop(0, "rgba(255,255,255,0.9)");
+  rg.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = rg; g.beginPath(); g.arc(0, 0, r * 0.5, 0, TAU); g.fill();
+  g.globalCompositeOperation = "lighter";
+  for (const ang of [0, Math.PI / 2]) {
+    g.save(); g.rotate(ang);
+    const lg = g.createLinearGradient(-r, 0, r, 0);
+    lg.addColorStop(0, "rgba(255,255,255,0)");
+    lg.addColorStop(0.5, "rgba(255,255,255,0.85)");
+    lg.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = lg; g.fillRect(-r, -size * 0.012, size, size * 0.024);
+    g.restore();
+  }
+  return c;
+})();
+
+function makeVignette() {
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const g = c.getContext("2d");
+  const cx = W / 2, cy = H / 2, r = Math.hypot(cx, cy);
+  const rg = g.createRadialGradient(cx, cy, r * 0.58, cx, cy, r);
+  rg.addColorStop(0, "rgba(0,0,0,0)");
+  rg.addColorStop(1, "rgba(0,0,0,0.42)"); // 中心は明るいまま・周辺だけ締める（子どもにも安全）
+  g.fillStyle = rg; g.fillRect(0, 0, W, H);
+  vignette = c;
+}
+
 // テーマごとの色相
 function themeHue() {
   if (theme === "aurora") return 150 + Math.random() * 110; // 緑〜青紫
@@ -88,6 +131,10 @@ function resize() {
   stage.style.width = window.innerWidth + "px";
   stage.style.height = window.innerHeight + "px";
   bg.width = W; bg.height = H;
+  lightC.width = W; lightC.height = H;
+  BW = Math.max(1, W >> 2); BH = Math.max(1, H >> 2); // 1/4解像度ブルーム
+  bloomC.width = BW; bloomC.height = BH;
+  makeVignette();
 }
 window.addEventListener("resize", resize);
 window.addEventListener("orientationchange", () => setTimeout(resize, 250));
@@ -149,7 +196,8 @@ function addParticle(x, y, o = {}) {
     life: 1,
     decay: o.decay || (0.012 + Math.random() * 0.012),
     swirl: o.swirl ?? (0.6 + Math.random() * 0.8), // 渦の効き
-    orbit: o.orbit || null
+    orbit: o.orbit || null,
+    flare: o.flare || false // きらめき（star flare）を付ける
   });
 }
 
@@ -178,28 +226,59 @@ function update(dt) {
 }
 
 function render() {
-  ctx.globalCompositeOperation = "source-over";
+  // 背景＋周辺減光（光が際立つ）
+  ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
   ctx.drawImage(bg, 0, 0);
-  // 手のフィードバック（指先のかすかな印）
-  if (handOn) drawHandHints();
-  // 光の粒（加算）。遠近投影：画面中心を消失点に、zで拡大・収束
-  ctx.globalCompositeOperation = "lighter";
+  if (vignette) ctx.drawImage(vignette, 0, 0);
+
+  // --- 光を専用バッファへ（加算）。遠近投影：画面中心が消失点、zで拡大・収束 ---
+  lcx.clearRect(0, 0, W, H);
+  lcx.globalCompositeOperation = "lighter";
+  if (handOn) drawHandHints(lcx);
   const VPx = W / 2, VPy = H / 2;
-  // 奥(z<0)→手前(z>=0)の順で描いて、手前を上に重ねる
   for (let pass = 0; pass < 2; pass++) {
     const wantNear = pass === 1;
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
       if ((p.z >= 0) !== wantNear) continue;
-      const ds = Math.max(0.18, Math.min(3.6, 1 + p.z)); // 遠近スケール
+      const ds = Math.max(0.18, Math.min(3.6, 1 + p.z));
       const sx = VPx + (p.x - VPx) * ds;
       const sy = VPy + (p.y - VPy) * ds;
       const sz = p.size * ds * (p.grow ? (0.5 + p.life * 0.9) : 1);
-      ctx.globalAlpha = Math.min(1, p.life * 1.3) * Math.max(0.22, Math.min(1.25, ds * 0.85));
-      ctx.drawImage(getGlow(p.hue), sx - sz, sy - sz, sz * 2, sz * 2);
+      const al = Math.min(1, p.life * 1.3) * Math.max(0.22, Math.min(1.25, ds * 0.85));
+      const g = getGlow(p.hue);
+      // 速い粒はモーションストリーク（流れる尾）
+      const spd = Math.hypot(p.vx, p.vy);
+      if (spd > 3 * DPR) {
+        const st = Math.min(spd * 0.7, sz * 3);
+        lcx.save();
+        lcx.globalAlpha = al * 0.55;
+        lcx.translate(sx, sy);
+        lcx.rotate(Math.atan2(p.vy, p.vx));
+        lcx.drawImage(g, -sz - st, -sz * 0.6, (sz + st) * 2, sz * 1.2);
+        lcx.restore();
+      }
+      lcx.globalAlpha = al;
+      lcx.drawImage(g, sx - sz, sy - sz, sz * 2, sz * 2);
+      // きらめき
+      if (p.flare) {
+        const fr = sz * 2.4;
+        lcx.globalAlpha = al * 0.7;
+        lcx.drawImage(flareSprite, sx - fr, sy - fr, fr * 2, fr * 2);
+      }
     }
   }
-  ctx.globalAlpha = 1;
+  lcx.globalAlpha = 1; lcx.globalCompositeOperation = "source-over";
+
+  // --- ブルーム：1/4解像度に縮小→拡大で柔らかく広がる発光 ---
+  bcx.globalCompositeOperation = "source-over";
+  bcx.clearRect(0, 0, BW, BH);
+  bcx.drawImage(lightC, 0, 0, BW, BH);
+  ctx.globalCompositeOperation = "lighter";
+  ctx.globalAlpha = 0.85; ctx.drawImage(bloomC, 0, 0, BW, BH, 0, 0, W, H);
+  ctx.globalAlpha = 0.45; ctx.drawImage(bloomC, 0, 0, BW, BH, -4 * DPR, -4 * DPR, W + 8 * DPR, H + 8 * DPR);
+  // くっきりした光を上に
+  ctx.globalAlpha = 1; ctx.drawImage(lightC, 0, 0);
   ctx.globalCompositeOperation = "source-over";
 }
 
@@ -371,25 +450,20 @@ function processHands(nowMs) {
   for (const k in handStates) if (!seen[k]) delete handStates[k];
 }
 
-function drawHandHints() {
+// 光バッファ(g2)へ描く。呼び出し側が加算合成にしている前提
+function drawHandHints(g2) {
   if (!liveHands.length) return;
   const hueBase = theme === "gold" ? 46 : theme === "aurora" ? 200 : 165;
-  ctx.globalCompositeOperation = "lighter";
+  const g = getGlow(hueBase);
   for (const hnd of liveHands) {
-    // 手のひらのオーラ
-    const g = getGlow(hueBase);
     const r = hnd.palmSize * 0.9;
-    ctx.globalAlpha = 0.10;
-    ctx.drawImage(g, hnd.palm.x - r, hnd.palm.y - r, r * 2, r * 2);
-    // 指先の小さな印
-    ctx.globalAlpha = 0.5;
+    g2.globalAlpha = 0.12;
+    g2.drawImage(g, hnd.palm.x - r, hnd.palm.y - r, r * 2, r * 2);
+    g2.globalAlpha = 0.5;
     const s = 7 * DPR;
-    for (const tp of hnd.tips) {
-      ctx.drawImage(g, tp.x - s, tp.y - s, s * 2, s * 2);
-    }
+    for (const tp of hnd.tips) g2.drawImage(g, tp.x - s, tp.y - s, s * 2, s * 2);
   }
-  ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = "source-over";
+  g2.globalAlpha = 1;
 }
 
 // ===================================================================
@@ -406,7 +480,8 @@ function bloomFrom(c, size) {
     addParticle(c.x, c.y, {
       vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz,
       size: (5 + Math.random() * 7) * DPR, hue: hue + (Math.random() - 0.5) * 20,
-      decay: vz > 0 ? 0.009 : 0.014 // 手前に来る光は残留を長く
+      decay: vz > 0 ? 0.009 : 0.014, // 手前に来る光は残留を長く
+      flare: Math.random() < 0.3
     });
   }
   addParticle(c.x, c.y, { size: (size || 60) * 1.1, grow: 0, decay: 0.03, hue });
@@ -422,7 +497,8 @@ function burst(x, y, power, dir = 0) {
       vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz,
       z: dir * 0.05,
       size: (5 + Math.random() * 6) * DPR, hue: hue + (Math.random() - 0.5) * 24,
-      decay: dir > 0 ? 0.009 : (dir < 0 ? 0.02 : 0.012) // 手前は残留長め・奥は短め
+      decay: dir > 0 ? 0.009 : (dir < 0 ? 0.02 : 0.012), // 手前は残留長め・奥は短め
+      flare: Math.random() < 0.35
     });
   }
 }
@@ -443,7 +519,8 @@ function starBurst(c) {
     const a = Math.random() * TAU, sp = (2 + Math.random() * 4) * DPR;
     addParticle(c.x, c.y, {
       vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1 * DPR, vz: (Math.random() - 0.3) * 0.1,
-      size: (4 + Math.random() * 6) * DPR, hue: 40 + Math.random() * 16, decay: 0.012
+      size: (4 + Math.random() * 6) * DPR, hue: 40 + Math.random() * 16, decay: 0.012,
+      flare: true
     });
   }
 }
