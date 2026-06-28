@@ -47,6 +47,7 @@
   var sourceMode = "camera"; // "camera" | "photo"
   var effectMode = "veil"; // "veil" | "flow" | "lens"
   var camStream = null, camReady = false;
+  var facing = "environment"; // "environment"=外カメラ / "user"=内カメラ
   var photoImg = null;
   var introHidden = false;
 
@@ -59,8 +60,8 @@
   var pointers = {};
   var dragging = false;
 
-  // ---- 動き検出（カメラの動いた所に光が集まる・軽量） ----
-  var motionOn = true;
+  // ---- 動き検出（カメラの動いた所に光が集まる・軽量。既定オフ） ----
+  var motionOn = false;
   var motionCanvas = document.createElement("canvas");
   var mctx = motionCanvas.getContext("2d", { willReadFrequently: true });
   var MW = 64, MH = 0;
@@ -288,7 +289,16 @@
   }
   function paintBackground() {
     if (sourceMode === "camera" && camReady && video.videoWidth) {
-      drawCover(video, video.videoWidth, video.videoHeight);
+      if (facing === "user") {
+        // 内カメラは鏡像で表示（自撮りの自然な見え方）
+        bgctx.save();
+        bgctx.translate(W, 0);
+        bgctx.scale(-1, 1);
+        drawCover(video, video.videoWidth, video.videoHeight);
+        bgctx.restore();
+      } else {
+        drawCover(video, video.videoWidth, video.videoHeight);
+      }
     } else if (sourceMode === "photo" && photoImg) {
       drawCover(photoImg, photoImg.naturalWidth, photoImg.naturalHeight);
     } else {
@@ -657,7 +667,7 @@
       return Promise.reject();
     }
     return navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
+      .getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
       .then(function (stream) { camStream = stream; video.srcObject = stream; return video.play(); })
       .then(function () {
         camReady = true; sourceMode = "camera"; setActive("source", "camera"); hideGate();
@@ -679,6 +689,20 @@
   function stopCamera() {
     if (camStream) { camStream.getTracks().forEach(function (t) { t.stop(); }); camStream = null; }
     camReady = false;
+  }
+  function flipCamera() {
+    Sound.kick();
+    var prev = facing;
+    facing = facing === "environment" ? "user" : "environment";
+    stopCamera();
+    startCamera()
+      .then(function () { toast(facing === "user" ? "内カメラ" : "外カメラ"); })
+      .catch(function () {
+        // 失敗したら元に戻す（内カメラが無い端末など）
+        facing = prev;
+        toast("切り替えできませんでした");
+        startCamera().catch(function () {});
+      });
   }
 
   // ===================================================================
@@ -715,6 +739,17 @@
     soundBtn.classList.toggle("muted", !on);
     soundBtn.setAttribute("aria-pressed", on ? "true" : "false");
     toast(on ? "音オン" : "音オフ");
+  });
+
+  // カメラ切替（内/外）
+  document.getElementById("flip").addEventListener("click", function () {
+    if (sourceMode !== "camera" || !camReady) {
+      // まだカメラが動いていなければ、内カメラで起動を試みる
+      facing = "user";
+      startCamera().then(function () { toast("内カメラ"); }).catch(function () { showGate(); });
+      return;
+    }
+    flipCamera();
   });
 
   // 動きに反応のオン/オフ

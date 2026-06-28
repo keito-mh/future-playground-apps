@@ -64,7 +64,15 @@
 
       <!-- 右上ユーティリティ -->
       <div id="util">
-        <button id="motion" class="iconBtn on" aria-label="動きに光が反応" title="動きに反応" aria-pressed="true">
+        <button id="flip" class="iconBtn" aria-label="内カメラ・外カメラ切替" title="カメラ切替">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <rect x="3" y="7" width="18" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.6" />
+            <path d="M9 7l1.3-2h3.4L15 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+            <path d="M9.5 13.5a2.8 2.8 0 0 1 5-1.2M14.5 13.5a2.8 2.8 0 0 1-5 1.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            <path d="M14.6 11.1l.1 1.3-1.3-.2M9.4 15.9l-.1-1.3 1.3.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        <button id="motion" class="iconBtn" aria-label="動きに光が反応" title="動きに反応" aria-pressed="false">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
             <circle cx="12" cy="12" r="2.2" fill="currentColor" />
             <path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M5 5a9.5 9.5 0 0 0 0 14M19 5a9.5 9.5 0 0 1 0 14"
