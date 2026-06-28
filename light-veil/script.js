@@ -67,10 +67,11 @@ function getGlow(hue) {
     c.width = c.height = size;
     const g = c.getContext("2d"), r = size / 2;
     const grd = g.createRadialGradient(r, r, 0, r, r, r);
-    grd.addColorStop(0, "rgba(255,255,255,0.95)");
-    grd.addColorStop(0.22, `hsla(${key},100%,80%,0.75)`);
-    grd.addColorStop(0.5, `hsla(${key},95%,60%,0.28)`);
-    grd.addColorStop(1, `hsla(${key},90%,55%,0)`);
+    // 白飛びを抑え、色味のあるやわらかい光に（上品）
+    grd.addColorStop(0, "rgba(255,255,255,0.7)");
+    grd.addColorStop(0.16, `hsla(${key},90%,78%,0.5)`);
+    grd.addColorStop(0.45, `hsla(${key},85%,62%,0.16)`);
+    grd.addColorStop(1, `hsla(${key},80%,58%,0)`);
     g.fillStyle = grd;
     g.fillRect(0, 0, size, size);
     glowCache[key] = c;
@@ -108,7 +109,7 @@ function makeVignette() {
   const cx = W / 2, cy = H / 2, r = Math.hypot(cx, cy);
   const rg = g.createRadialGradient(cx, cy, r * 0.58, cx, cy, r);
   rg.addColorStop(0, "rgba(0,0,0,0)");
-  rg.addColorStop(1, "rgba(0,0,0,0.42)"); // 中心は明るいまま・周辺だけ締める（子どもにも安全）
+  rg.addColorStop(1, "rgba(0,0,0,0.24)"); // 中心は明るいまま・周辺をほんのり締める（控えめ）
   g.fillStyle = rg; g.fillRect(0, 0, W, H);
   vignette = c;
 }
@@ -247,12 +248,12 @@ function render() {
       const sz = p.size * ds * (p.grow ? (0.5 + p.life * 0.9) : 1);
       const al = Math.min(1, p.life * 1.3) * Math.max(0.22, Math.min(1.25, ds * 0.85));
       const g = getGlow(p.hue);
-      // 速い粒はモーションストリーク（流れる尾）
+      // 速い粒はモーションストリーク（控えめな尾）
       const spd = Math.hypot(p.vx, p.vy);
-      if (spd > 3 * DPR) {
-        const st = Math.min(spd * 0.7, sz * 3);
+      if (spd > 4 * DPR) {
+        const st = Math.min(spd * 0.5, sz * 2.2);
         lcx.save();
-        lcx.globalAlpha = al * 0.55;
+        lcx.globalAlpha = al * 0.3;
         lcx.translate(sx, sy);
         lcx.rotate(Math.atan2(p.vy, p.vx));
         lcx.drawImage(g, -sz - st, -sz * 0.6, (sz + st) * 2, sz * 1.2);
@@ -260,10 +261,10 @@ function render() {
       }
       lcx.globalAlpha = al;
       lcx.drawImage(g, sx - sz, sy - sz, sz * 2, sz * 2);
-      // きらめき
-      if (p.flare) {
-        const fr = sz * 2.4;
-        lcx.globalAlpha = al * 0.7;
+      // きらめき（小さく繊細に・近い粒だけ）
+      if (p.flare && ds > 0.8) {
+        const fr = sz * 1.6;
+        lcx.globalAlpha = al * 0.35;
         lcx.drawImage(flareSprite, sx - fr, sy - fr, fr * 2, fr * 2);
       }
     }
@@ -275,10 +276,10 @@ function render() {
   bcx.clearRect(0, 0, BW, BH);
   bcx.drawImage(lightC, 0, 0, BW, BH);
   ctx.globalCompositeOperation = "lighter";
-  ctx.globalAlpha = 0.85; ctx.drawImage(bloomC, 0, 0, BW, BH, 0, 0, W, H);
-  ctx.globalAlpha = 0.45; ctx.drawImage(bloomC, 0, 0, BW, BH, -4 * DPR, -4 * DPR, W + 8 * DPR, H + 8 * DPR);
-  // くっきりした光を上に
-  ctx.globalAlpha = 1; ctx.drawImage(lightC, 0, 0);
+  ctx.globalAlpha = 0.7; ctx.drawImage(bloomC, 0, 0, BW, BH, 0, 0, W, H);
+  ctx.globalAlpha = 0.32; ctx.drawImage(bloomC, 0, 0, BW, BH, -6 * DPR, -6 * DPR, W + 12 * DPR, H + 12 * DPR);
+  // くっきりした光を上に（やや控えめに重ねて上品に）
+  ctx.globalAlpha = 0.8; ctx.drawImage(lightC, 0, 0);
   ctx.globalCompositeOperation = "source-over";
 }
 
@@ -471,7 +472,7 @@ function drawHandHints(g2) {
 // ===================================================================
 function bloomFrom(c, size) {
   const hue = themeHue();
-  const n = 28;
+  const n = 20;
   for (let i = 0; i < n; i++) {
     const a = (i / n) * TAU + Math.random() * 0.3;
     const sp = (2 + Math.random() * 4) * DPR;
@@ -481,7 +482,7 @@ function bloomFrom(c, size) {
       vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz,
       size: (5 + Math.random() * 7) * DPR, hue: hue + (Math.random() - 0.5) * 20,
       decay: vz > 0 ? 0.009 : 0.014, // 手前に来る光は残留を長く
-      flare: Math.random() < 0.3
+      flare: Math.random() < 0.14
     });
   }
   addParticle(c.x, c.y, { size: (size || 60) * 1.1, grow: 0, decay: 0.03, hue });
@@ -489,7 +490,7 @@ function bloomFrom(c, size) {
 // dir: +1=手前へ飛ぶ / -1=奥へ飛ぶ / 0=平面
 function burst(x, y, power, dir = 0) {
   const hue = themeHue();
-  const n = Math.floor(22 * power);
+  const n = Math.floor(16 * power);
   for (let i = 0; i < n; i++) {
     const a = Math.random() * TAU, sp = (1.5 + Math.random() * 5) * power * DPR;
     const vz = dir * (0.05 + Math.random() * 0.14) + (Math.random() - 0.5) * 0.04;
@@ -498,7 +499,7 @@ function burst(x, y, power, dir = 0) {
       z: dir * 0.05,
       size: (5 + Math.random() * 6) * DPR, hue: hue + (Math.random() - 0.5) * 24,
       decay: dir > 0 ? 0.009 : (dir < 0 ? 0.02 : 0.012), // 手前は残留長め・奥は短め
-      flare: Math.random() < 0.35
+      flare: Math.random() < 0.16
     });
   }
 }
@@ -515,7 +516,7 @@ function pointStream(tip, vx, vy) {
 }
 // サムズアップ：金色寄りの星がパッと舞う
 function starBurst(c) {
-  for (let i = 0; i < 16; i++) {
+  for (let i = 0; i < 12; i++) {
     const a = Math.random() * TAU, sp = (2 + Math.random() * 4) * DPR;
     addParticle(c.x, c.y, {
       vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1 * DPR, vz: (Math.random() - 0.3) * 0.1,
@@ -751,68 +752,131 @@ function toast(msg) {
 // 音（Web Audio・やさしい音色・素材ファイルなし）
 // ===================================================================
 const Sound = (() => {
-  let actx = null, master = null, send = null, on = true, lastChime = 0;
-  // 色テーマごとに音階・音色・残響を変える
+  let actx = null, master = null, send = null, on = true, lastChime = 0, pad = null;
+  // 色テーマごとに音階・音色・残響を変える（壮大さのため低音/和音を厚めに）
   const PAL = {
-    green: { scale: [523.25, 587.33, 698.46, 783.99, 880.0, 1046.5], type: "triangle", wet: 0.55, chord: [523.25, 659.25, 783.99], root: 523.25 },
-    aurora: { scale: [587.33, 659.25, 739.99, 880.0, 987.77, 1174.66], type: "sine", wet: 0.9, chord: [587.33, 739.99, 880.0, 1108.73], root: 587.33 },
-    gold: { scale: [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5], type: "triangle", wet: 0.4, chord: [523.25, 659.25, 783.99, 1046.5], root: 392.0 }
+    green: { scale: [523.25, 587.33, 698.46, 783.99, 880.0, 1046.5], type: "sine", wet: 0.6, chord: [261.63, 392.0, 523.25, 659.25], root: 261.63 },
+    aurora: { scale: [587.33, 659.25, 739.99, 880.0, 987.77, 1174.66], type: "sine", wet: 0.85, chord: [293.66, 440.0, 587.33, 739.99], root: 293.66 },
+    gold: { scale: [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5], type: "triangle", wet: 0.55, chord: [261.63, 392.0, 523.25, 659.25, 783.99], root: 196.0 }
   };
   let pal = PAL.green;
+
   function impulse(dur, decay) {
     const rate = actx.sampleRate, len = Math.floor(rate * dur);
     const buf = actx.createBuffer(2, len, rate);
-    for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay); }
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) {
+        // やわらかな立ち上がり＋長い減衰の壮大なリバーブ
+        const env = Math.pow(1 - i / len, decay) * (1 - Math.exp(-i / (rate * 0.02)));
+        d[i] = (Math.random() * 2 - 1) * env;
+      }
+    }
     return buf;
   }
   function init() {
     if (actx) return;
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
     actx = new AC();
-    master = actx.createGain(); master.gain.value = 0.0001; master.connect(actx.destination);
-    const conv = actx.createConvolver(); conv.buffer = impulse(1.8, 2.4);
-    const wet = actx.createGain(); wet.gain.value = 0.4; conv.connect(wet); wet.connect(master); send = conv;
-    master.gain.exponentialRampToValueAtTime(on ? 0.8 : 0.0001, actx.currentTime + 0.6);
+    master = actx.createGain(); master.gain.value = 0.0001;
+    const comp = actx.createDynamicsCompressor(); // 全体をまとめて上品に
+    comp.threshold.value = -18; comp.ratio.value = 3; comp.attack.value = 0.005; comp.release.value = 0.25;
+    master.connect(comp); comp.connect(actx.destination);
+    const conv = actx.createConvolver(); conv.buffer = impulse(3.6, 2.6); // 長い残響
+    const wet = actx.createGain(); wet.gain.value = 0.7; conv.connect(wet); wet.connect(master); send = conv;
+    master.gain.exponentialRampToValueAtTime(on ? 0.7 : 0.0001, actx.currentTime + 0.8);
   }
   function resume() { if (actx && actx.state === "suspended") actx.resume(); }
-  function note(freq, o = {}) {
+
+  // リッチな1音：デチューンを重ねた発振＋任意のサブ＋ローパス＋ステレオ＋残響
+  function voice(freq, o = {}) {
     if (!actx || !on) return;
-    const t = actx.currentTime + (o.when || 0), dur = o.dur || 0.5, g = actx.createGain();
-    const peak = o.gain ?? 0.12;
+    const t = actx.currentTime + (o.when || 0), dur = o.dur || 1, peak = o.gain ?? 0.1;
+    const g = actx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(peak, t + (o.attack || 0.012));
+    g.gain.exponentialRampToValueAtTime(peak, t + (o.attack || 0.02));
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    const osc = actx.createOscillator(); osc.type = o.type || "sine";
-    osc.frequency.setValueAtTime(freq, t);
-    if (o.glide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq * o.glide), t + dur);
-    osc.connect(g); g.connect(master);
-    if (send && o.wet !== 0) { const s = actx.createGain(); s.gain.value = o.wet || 0.6; g.connect(s); s.connect(send); }
-    osc.start(t); osc.stop(t + dur + 0.05);
+    const lp = actx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = o.bright || 2600; lp.Q.value = 0.3;
+    g.connect(lp);
+    let out = lp;
+    if (actx.createStereoPanner) { const pan = actx.createStereoPanner(); pan.pan.value = o.pan != null ? o.pan : (Math.random() * 1.1 - 0.55); lp.connect(pan); out = pan; }
+    out.connect(master);
+    if (send) { const s = actx.createGain(); s.gain.value = o.wet ?? 0.5; out.connect(s); s.connect(send); }
+    const voices = o.voices || 3, det = o.detune ?? 7;
+    for (let i = 0; i < voices; i++) {
+      const osc = actx.createOscillator(); osc.type = o.type || "sine";
+      osc.frequency.setValueAtTime(freq, t);
+      osc.detune.setValueAtTime((i - (voices - 1) / 2) * det, t);
+      if (o.glide) osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq * o.glide), t + dur);
+      osc.connect(g); osc.start(t); osc.stop(t + dur + 0.1);
+    }
+    if (o.sub) {
+      const sub = actx.createOscillator(); sub.type = "sine"; sub.frequency.setValueAtTime(freq / 2, t);
+      const sg = actx.createGain(); sg.gain.setValueAtTime(0.0001, t);
+      sg.gain.exponentialRampToValueAtTime(peak * 0.7, t + (o.attack || 0.02));
+      sg.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      sub.connect(sg); sg.connect(lp); sub.start(t); sub.stop(t + dur + 0.1);
+    }
   }
+
+  // 壮大さの土台：ゆっくり揺れるアンビエントの和音ドローン
+  function startPad() {
+    if (pad || !actx) return;
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.03, actx.currentTime + 5);
+    const lp = actx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 480; lp.Q.value = 0.5;
+    const lfo = actx.createOscillator(); lfo.frequency.value = 0.05;
+    const lg = actx.createGain(); lg.gain.value = 260; lfo.connect(lg); lg.connect(lp.frequency); lfo.start();
+    g.connect(lp); lp.connect(master);
+    const s = actx.createGain(); s.gain.value = 0.9; lp.connect(s); s.connect(send);
+    const oscs = [];
+    const base = pal.root / 2;
+    [base, base * 1.5, base * 2].forEach((f) => [-9, 9].forEach((d) => {
+      const o = actx.createOscillator(); o.type = "sawtooth"; o.frequency.value = f; o.detune.value = d;
+      o.connect(g); o.start(); oscs.push(o);
+    }));
+    pad = { g, lp, lfo, oscs };
+  }
+  function retunePad() {
+    if (!pad || !actx) return;
+    const base = pal.root / 2, fs = [base, base * 1.5, base * 2];
+    let idx = 0;
+    for (let i = 0; i < fs.length; i++) for (let d = 0; d < 2; d++) {
+      if (pad.oscs[idx]) pad.oscs[idx].frequency.setTargetAtTime(fs[i], actx.currentTime, 0.5);
+      idx++;
+    }
+  }
+
   return {
-    kick() { init(); resume(); },
-    setTheme(t) { pal = PAL[t] || PAL.green; },
+    kick() { init(); resume(); startPad(); },
+    setTheme(t) { pal = PAL[t] || PAL.green; retunePad(); },
     toggle() {
       on = !on;
-      if (actx) { const t = actx.currentTime; master.gain.cancelScheduledValues(t); master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), t); master.gain.exponentialRampToValueAtTime(on ? 0.8 : 0.0001, t + 0.25); }
+      if (actx) { const t = actx.currentTime; master.gain.cancelScheduledValues(t); master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), t); master.gain.exponentialRampToValueAtTime(on ? 0.7 : 0.0001, t + 0.3); }
       return on;
     },
+    // なぞり/指先：澄んだ鈴。1発振でも長い残響で上品に
     chime(speed) {
       if (!actx || !on) return;
-      const now = performance.now(); if (now - lastChime < 80) return; lastChime = now;
-      const f = pal.scale[(Math.random() * pal.scale.length) | 0] * (Math.random() < 0.5 ? 1 : 2);
-      note(f, { type: pal.type, dur: 0.5, gain: 0.045 + Math.min(speed, 2) * 0.02, attack: 0.005, wet: pal.wet });
+      const now = performance.now(); if (now - lastChime < 95) return; lastChime = now;
+      const f = pal.scale[(Math.random() * pal.scale.length) | 0] * (Math.random() < 0.4 ? 2 : 1);
+      voice(f, { type: pal.type, dur: 1.0, gain: 0.035 + Math.min(speed, 2) * 0.012, attack: 0.006, wet: Math.min(1, pal.wet + 0.25), voices: 1, bright: 5200 });
     },
+    // 弾ける：きらめく高音＋深いサブ
     burst() {
-      note(pal.scale[pal.scale.length - 1], { type: "sine", dur: 0.45, gain: 0.16, glide: 0.45, attack: 0.004, wet: Math.min(1, pal.wet + 0.1) });
-      note(pal.scale[3] * 2, { type: "sine", dur: 0.18, gain: 0.06, glide: 0.5, attack: 0.003, wet: 0.5 });
+      voice(pal.scale[4], { type: "sine", dur: 1.3, gain: 0.11, glide: 0.7, attack: 0.004, wet: pal.wet + 0.2, voices: 2, bright: 4400 });
+      voice(pal.root, { type: "sine", dur: 0.8, gain: 0.10, attack: 0.004, wet: 0.35, voices: 1, sub: true, bright: 1100 });
     },
-    bloom() { pal.chord.forEach((f, i) => note(f, { type: pal.type === "triangle" ? "sine" : pal.type, dur: 1.1 + i * 0.05, gain: 0.12 - i * 0.02, attack: 0.03 + i * 0.02, wet: Math.min(1, pal.wet + 0.2), when: i * 0.02 })); },
-    gather() { note(pal.root, { dur: 0.6, gain: 0.08, glide: 1.6, attack: 0.04, wet: pal.wet }); },
-    calm() { note(pal.root / 2, { dur: 0.9, gain: 0.09, attack: 0.06, wet: pal.wet }); note(pal.root, { dur: 0.9, gain: 0.05, attack: 0.08, wet: pal.wet }); },
-    push() { note(pal.root, { type: pal.type, dur: 0.5, gain: 0.14, glide: 1.9, attack: 0.02, wet: pal.wet }); },   // 近づく＝上昇
-    pull() { note(pal.root * 2, { type: "sine", dur: 0.6, gain: 0.10, glide: 0.4, attack: 0.02, wet: Math.min(1, pal.wet + 0.1) }); }, // 遠ざかる＝下降
-    star() { for (let i = 0; i < 3; i++) note(pal.scale[i + 1] * 2, { type: "triangle", dur: 0.4, gain: 0.08, attack: 0.004, wet: pal.wet, when: i * 0.07 }); }
+    // ひらく：壮大な和音の立ち上がり
+    bloom() {
+      pal.chord.forEach((f, i) => voice(f, { type: pal.type, dur: 2.6, gain: 0.085 - i * 0.012, attack: 0.12 + i * 0.05, wet: pal.wet + 0.25, voices: 3, sub: i === 0, bright: 2600, when: i * 0.04 }));
+    },
+    gather() { voice(pal.root * 2, { type: pal.type, dur: 1.0, gain: 0.07, glide: 1.6, attack: 0.05, wet: pal.wet + 0.2, voices: 2, bright: 3200 }); },
+    calm() { voice(pal.root / 2, { type: "sine", dur: 1.8, gain: 0.10, attack: 0.12, wet: pal.wet + 0.2, voices: 2, sub: true, bright: 1300 }); voice(pal.root, { type: "sine", dur: 1.6, gain: 0.06, attack: 0.18, wet: pal.wet + 0.2, voices: 2, bright: 1600 }); },
+    push() { voice(pal.root, { type: pal.type, dur: 1.0, gain: 0.12, glide: 2.0, attack: 0.03, wet: pal.wet + 0.2, voices: 3, sub: true, bright: 2400 }); },
+    pull() { voice(pal.root * 2, { type: "sine", dur: 1.1, gain: 0.08, glide: 0.45, attack: 0.03, wet: pal.wet + 0.3, voices: 2, bright: 3600 }); },
+    star() { for (let i = 0; i < 4; i++) voice(pal.scale[i] * 2, { type: "triangle", dur: 0.9, gain: 0.06, attack: 0.004, wet: pal.wet + 0.2, voices: 2, bright: 5200, when: i * 0.08 }); }
   };
 })();
 
