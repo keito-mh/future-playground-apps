@@ -31,9 +31,16 @@
   var bg = document.createElement("canvas");
   var bgctx = bg.getContext("2d", { alpha: false });
 
-  // ---- 光スプライト（一度だけ生成して使い回す） ----
+  // ---- 歪みを合成するための作業レイヤー（使い回す） ----
+  var layer = document.createElement("canvas");
+  var lctx = layer.getContext("2d");
+
+  // ---- スプライト（一度だけ生成して使い回す） ----
   var glow = makeGlowSprite(128);
   var ring = makeRingSprite(256);
+  var mask = makeMaskSprite(256); // 歪みのフチをやわらかく溶かすアルファマスク
+
+  var DIST_MAX = 0; // 歪みを描く最大半径（resize で決定。これ以上はフチの光のみ）
 
   // ---- 状態 ----
   var W = 0, H = 0, DPR = 1;
@@ -53,6 +60,132 @@
   var dragging = false;
 
   // ===================================================================
+  // 音（Web Audio で合成。素材ファイルなし＝軽い。やさしい音色）
+  //  - なぞる：風鈴のような小さな粒の音（ペンタトニックでいつでも調和）
+  //  - タップ：水滴のポチャン
+  //  - 長押し：ふわっと上がる持続音 → 離すと和音で開く
+  // 端末の自動再生制限のため、最初のユーザー操作で初期化／再開する。
+  // ===================================================================
+  var Sound = (function () {
+    var actx = null, master = null, send = null, on = true, lastBlip = 0, hold = null;
+    var SCALE = [523.25, 587.33, 698.46, 783.99, 880.0, 1046.5]; // C D F G A C(高)
+
+    function impulse(dur, decay) {
+      var rate = actx.sampleRate, len = Math.floor(rate * dur);
+      var buf = actx.createBuffer(2, len, rate);
+      for (var ch = 0; ch < 2; ch++) {
+        var d = buf.getChannelData(ch);
+        for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+      }
+      return buf;
+    }
+    function init() {
+      if (actx) return;
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      actx = new AC();
+      master = actx.createGain();
+      master.gain.value = on ? 0.0 : 0.0;
+      master.connect(actx.destination);
+      // やわらかい残響
+      var conv = actx.createConvolver();
+      conv.buffer = impulse(1.8, 2.4);
+      var wet = actx.createGain();
+      wet.gain.value = 0.45;
+      conv.connect(wet); wet.connect(master);
+      send = conv;
+      // 起動時にふわっと立ち上げる
+      master.gain.setValueAtTime(0.0001, actx.currentTime);
+      master.gain.exponentialRampToValueAtTime(on ? 0.8 : 0.0001, actx.currentTime + 0.6);
+    }
+    function resume() { if (actx && actx.state === "suspended") actx.resume(); }
+
+    // 1音（dry + reverb send）
+    function note(freq, opt) {
+      if (!actx || !on) return;
+      opt = opt || {};
+      var t = actx.currentTime;
+      var dur = opt.dur || 0.5;
+      var g = actx.createGain();
+      var peak = opt.gain != null ? opt.gain : 0.12;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + (opt.attack || 0.012));
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      var o = actx.createOscillator();
+      o.type = opt.type || "sine";
+      o.frequency.setValueAtTime(freq, t);
+      if (opt.glide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq * opt.glide), t + dur);
+      o.connect(g);
+      g.connect(master);
+      if (send && opt.wet !== 0) { var s = actx.createGain(); s.gain.value = opt.wet || 0.6; g.connect(s); s.connect(send); }
+      o.start(t);
+      o.stop(t + dur + 0.05);
+    }
+
+    return {
+      enabled: function () { return on; },
+      kick: function () { init(); resume(); }, // 最初のユーザー操作で
+      toggle: function () {
+        on = !on;
+        if (actx) {
+          var t = actx.currentTime;
+          master.gain.cancelScheduledValues(t);
+          master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), t);
+          master.gain.exponentialRampToValueAtTime(on ? 0.8 : 0.0001, t + 0.25);
+        }
+        return on;
+      },
+      // なぞり：軽い粒（速さで少し明るく・量は抑えめ）
+      blip: function (speed) {
+        if (!actx || !on) return;
+        var now = performance.now();
+        if (now - lastBlip < 75) return;
+        lastBlip = now;
+        var f = SCALE[(Math.random() * SCALE.length) | 0] * (Math.random() < 0.5 ? 1 : 2);
+        note(f, { type: "triangle", dur: 0.5, gain: 0.05 + Math.min(speed, 2) * 0.02, attack: 0.005, wet: 0.7 });
+      },
+      // タップ：水滴
+      drop: function () {
+        note(880, { type: "sine", dur: 0.45, gain: 0.16, glide: 0.45, attack: 0.004, wet: 0.8 });
+        note(1320, { type: "sine", dur: 0.18, gain: 0.06, glide: 0.5, attack: 0.003, wet: 0.5 });
+      },
+      // 長押し：持続音をふわっと上げる
+      holdStart: function () {
+        if (!actx || !on || hold) return;
+        var t = actx.currentTime;
+        var g = actx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.10, t + 0.4);
+        var o = actx.createOscillator();
+        o.type = "sine"; o.frequency.setValueAtTime(330, t);
+        o.frequency.exponentialRampToValueAtTime(660, t + 2.2);
+        var lfo = actx.createOscillator(); var lg = actx.createGain();
+        lfo.frequency.value = 5.5; lg.gain.value = 6; lfo.connect(lg); lg.connect(o.frequency);
+        o.connect(g); g.connect(master);
+        if (send) { var s = actx.createGain(); s.gain.value = 0.7; g.connect(s); s.connect(send); }
+        o.start(t); lfo.start(t);
+        hold = { o: o, g: g, lfo: lfo };
+      },
+      holdEnd: function () {
+        if (hold && actx) {
+          var t = actx.currentTime;
+          hold.g.gain.cancelScheduledValues(t);
+          hold.g.gain.setValueAtTime(Math.max(hold.g.gain.value, 0.0001), t);
+          hold.g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+          hold.o.stop(t + 0.3); hold.lfo.stop(t + 0.3);
+          hold = null;
+        }
+      },
+      // 離したとき：やわらかい和音で開く
+      bloom: function () {
+        note(523.25, { type: "sine", dur: 1.1, gain: 0.12, attack: 0.03, wet: 0.9 });
+        note(659.25, { type: "sine", dur: 1.1, gain: 0.09, attack: 0.05, wet: 0.9 });
+        note(783.99, { type: "sine", dur: 1.2, gain: 0.07, attack: 0.07, wet: 0.9 });
+      }
+    };
+  })();
+
+  // ===================================================================
   // スプライト生成（緑〜シアンの発光）
   // ===================================================================
   function makeGlowSprite(size) {
@@ -65,6 +198,23 @@
     grd.addColorStop(0.25, "rgba(150,255,210,0.7)");
     grd.addColorStop(0.55, "rgba(60,220,190,0.25)");
     grd.addColorStop(1, "rgba(40,200,180,0)");
+    g.fillStyle = grd;
+    g.fillRect(0, 0, size, size);
+    return c;
+  }
+  function makeMaskSprite(size) {
+    // 中心ほど不透明、外周へ向けてなだらかに透明になるアルファマスク。
+    // これで歪みの境界がパキッと割れず、徐々にブラーが弱まるように溶ける。
+    var c = document.createElement("canvas");
+    c.width = c.height = size;
+    var g = c.getContext("2d");
+    var r = size / 2;
+    var grd = g.createRadialGradient(r, r, 0, r, r, r);
+    grd.addColorStop(0.0, "rgba(255,255,255,1)");
+    grd.addColorStop(0.35, "rgba(255,255,255,0.9)");
+    grd.addColorStop(0.6, "rgba(255,255,255,0.6)");
+    grd.addColorStop(0.82, "rgba(255,255,255,0.22)");
+    grd.addColorStop(1.0, "rgba(255,255,255,0)");
     g.fillStyle = grd;
     g.fillRect(0, 0, size, size);
     return c;
@@ -96,6 +246,8 @@
     stage.style.width = window.innerWidth + "px";
     stage.style.height = window.innerHeight + "px";
     bg.width = W; bg.height = H;
+    layer.width = W; layer.height = H;
+    DIST_MAX = Math.max(W, H) * 0.5; // これ以上大きい歪みはフチの光だけにして軽さを守る
   }
   window.addEventListener("resize", resize);
   window.addEventListener("orientationchange", function () { setTimeout(resize, 250); });
@@ -192,6 +344,7 @@
         { size: (5 + Math.random() * 6) * DPR, decay: 0.04 });
     }
 
+    Sound.blip(sp);
     p.lastX = x; p.lastY = y; p.lastT = now; p.moved += dist;
   }
 
@@ -208,6 +361,7 @@
       var s = (1.5 + Math.random() * 2.5) * DPR;
       addSpark(cx, cy, { vx: Math.cos(a) * s, vy: Math.sin(a) * s, size: (5 + Math.random() * 6) * DPR });
     }
+    Sound.drop();
   }
 
   // ===================================================================
@@ -221,6 +375,7 @@
       life: 1, decay: 0, held: true
     };
     warps.push(p.hold);
+    Sound.holdStart();
     p.holdIv = setInterval(function () {
       if (!p.hold) return;
       p.hold.r = Math.min(p.hold.r + 1.6 * DPR, 130 * DPR);
@@ -235,6 +390,7 @@
   }
   function releaseHold(p) {
     if (p.holdIv) clearInterval(p.holdIv);
+    Sound.holdEnd();
     if (!p.hold) return;
     var h = p.hold;
     h.held = false;
@@ -246,6 +402,7 @@
       var a = Math.random() * TAU, s = (1 + Math.random() * 4) * DPR * (0.5 + h.strength);
       addSpark(h.x, h.y, { vx: Math.cos(a) * s, vy: Math.sin(a) * s, size: (5 + Math.random() * 6) * DPR });
     }
+    Sound.bloom();
     p.hold = null;
   }
 
@@ -274,22 +431,50 @@
   // ===================================================================
   function drawWarp(w) {
     var a = w.life < 0 ? 0 : w.life;
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(w.x, w.y, w.r, 0, TAU);
-    ctx.clip();
-    if (w.dx || w.dy) {
-      // 流れ：景色を少しずらして描き直す
-      ctx.drawImage(bg, w.dx * a, w.dy * a, W, H);
-    } else if (w.strength > 0.001) {
-      // バルジ：中心基準で拡大＝ぷくっと膨らむ
-      var s = 1 + w.strength * a;
-      ctx.translate(w.x, w.y);
-      ctx.scale(s, s);
-      ctx.translate(-w.x, -w.y);
-      ctx.drawImage(bg, 0, 0);
+    if (a <= 0) return;
+    var R = w.r;
+
+    // --- 歪み（やわらかいフチ） ---
+    var hasDist = (w.strength > 0.001 || w.dx || w.dy) && R <= DIST_MAX;
+    if (hasDist) {
+      var bx = Math.max(0, Math.floor(w.x - R));
+      var by = Math.max(0, Math.floor(w.y - R));
+      var ex = Math.min(W, Math.ceil(w.x + R));
+      var ey = Math.min(H, Math.ceil(w.y + R));
+      var bw = ex - bx, bh = ey - by;
+      if (bw > 0 && bh > 0) {
+        // 1) 作業レイヤーに、歪ませた景色を描く（処理量は枠内だけ）
+        lctx.globalCompositeOperation = "source-over";
+        lctx.clearRect(bx, by, bw, bh);
+        lctx.save();
+        lctx.beginPath();
+        lctx.rect(bx, by, bw, bh);
+        lctx.clip();
+        if (w.dx || w.dy) {
+          lctx.drawImage(bg, w.dx * a, w.dy * a, W, H); // 流れ：ずらす
+        } else {
+          var s = 1 + w.strength * a; // バルジ：拡大
+          lctx.translate(w.x, w.y);
+          lctx.scale(s, s);
+          lctx.translate(-w.x, -w.y);
+          lctx.drawImage(bg, 0, 0);
+        }
+        lctx.restore();
+        // 2) アルファマスクで外周をなだらかに溶かす（枠内だけに限定）
+        lctx.save();
+        lctx.beginPath();
+        lctx.rect(bx, by, bw, bh);
+        lctx.clip();
+        lctx.globalCompositeOperation = "destination-in";
+        lctx.drawImage(mask, w.x - R, w.y - R, R * 2, R * 2);
+        lctx.restore();
+        lctx.globalCompositeOperation = "source-over";
+        // 3) 本番キャンバスへ（life で全体もフェード）
+        ctx.globalAlpha = a;
+        ctx.drawImage(layer, bx, by, bw, bh, bx, by, bw, bh);
+        ctx.globalAlpha = 1;
+      }
     }
-    ctx.restore();
 
     // フチの光（波紋）
     if (w.ring) {
@@ -352,7 +537,7 @@
 
   stage.addEventListener("pointerdown", function (e) {
     if (!gate.classList.contains("hidden")) return;
-    e.preventDefault(); hideIntro();
+    e.preventDefault(); hideIntro(); Sound.kick();
     var pos = getPos(e), now = performance.now();
     var p = { lastX: pos.x, lastY: pos.y, lastT: now, startT: now, moved: 0, speed: 0, hold: null };
     pointers[e.pointerId] = p; dragging = true;
@@ -448,8 +633,18 @@
   // ===================================================================
   function showGate() { gate.classList.remove("hidden"); }
   function hideGate() { gate.classList.add("hidden"); }
-  document.getElementById("gateCam").addEventListener("click", function () { startCamera().catch(function () {}); });
-  document.getElementById("gatePhoto").addEventListener("click", pickPhoto);
+  document.getElementById("gateCam").addEventListener("click", function () { Sound.kick(); startCamera().catch(function () {}); });
+  document.getElementById("gatePhoto").addEventListener("click", function () { Sound.kick(); pickPhoto(); });
+
+  // 音のオン/オフ
+  var soundBtn = document.getElementById("sound");
+  soundBtn.addEventListener("click", function () {
+    Sound.kick();
+    var on = Sound.toggle();
+    soundBtn.classList.toggle("muted", !on);
+    soundBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    toast(on ? "音オン" : "音オフ");
+  });
 
   // ===================================================================
   // ドック
