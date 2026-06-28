@@ -191,6 +191,27 @@ body {
   transform: translateX(-50%) translateY(0);
 }
 
+/* ---- 左上：音 ---- */
+#sound {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  left: 14px;
+  z-index: 10;
+}
+#sound .slash {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+#sound .wave {
+  transition: opacity 0.15s;
+}
+#sound.muted .slash {
+  opacity: 1;
+}
+#sound.muted .wave {
+  opacity: 0;
+}
+
 /* ---- 右上ユーティリティ ---- */
 #util {
   position: absolute;
