@@ -51,6 +51,7 @@ let handOn = true;
 // ---- 光の粒（生きて流れる） ----
 const particles = [];
 const MAX_PARTICLES = 1000;
+let frameCount = 0;
 
 // ---- ポインタ（タッチ／マウスのフォールバック描画） ----
 const pointers = {};
@@ -249,7 +250,7 @@ function render() {
   lcx.globalCompositeOperation = "lighter";
   // 描いた軌跡（消えない・顔に貼り付く）。ブルームに乗って光る
   drawStrokes(lcx);
-  if (handOn && !drawMode) drawHandHints(lcx);
+  if (handOn) drawHandHints(lcx);
   const VPx = W / 2, VPy = H / 2;
   for (let pass = 0; pass < 2; pass++) {
     const wantNear = pass === 1;
@@ -302,7 +303,7 @@ function render() {
 // ===================================================================
 let handLandmarker = null;
 let handReady = false;
-let lastVideoTime = -1;
+let lastHandTime = -1, lastFaceTime = -1;
 let handStates = {}; // handedness ごとの前フレーム状態
 let liveHands = []; // 描画用：今フレームの指先
 
@@ -366,8 +367,8 @@ async function loadFace() {
 function processFace(nowMs) {
   faceLM = null; faceEye = null; faceVert = null;
   if (!drawMode || !faceReady || !faceLandmarker || sourceMode !== "camera" || !camReady || !video.videoWidth) return;
-  if (video.currentTime === lastVideoTime) return;
-  lastVideoTime = video.currentTime;
+  if (video.currentTime === lastFaceTime) return;
+  lastFaceTime = video.currentTime;
   let res;
   try { res = faceLandmarker.detectForVideo(video, nowMs); } catch (e) { return; }
   if (!res || !res.faceLandmarks || !res.faceLandmarks.length) return;
@@ -389,8 +390,8 @@ function fingerExtended(L, tip, pip) {
 function processHands(nowMs) {
   liveHands = [];
   if (!handOn || !handReady || !handLandmarker || sourceMode !== "camera" || !camReady || !video.videoWidth) return;
-  if (video.currentTime === lastVideoTime) return;
-  lastVideoTime = video.currentTime;
+  if (video.currentTime === lastHandTime) return;
+  lastHandTime = video.currentTime;
 
   let res;
   try { res = handLandmarker.detectForVideo(video, nowMs); } catch (e) { return; }
@@ -674,12 +675,19 @@ function drawStrokes(g2) {
 // メインループ
 // ===================================================================
 function frame() {
+  frameCount++;
   const liveCamera = sourceMode === "camera" && camReady && video.videoWidth;
   const active = liveCamera || dragging || particles.length > 0 || strokes.length > 0;
   if (active) {
     paintBackground();
-    if (drawMode) processFace(performance.now());
-    else processHands(performance.now());
+    if (drawMode) {
+      processFace(performance.now());
+      // 描画中もジェスチャーエフェクトを出す設定（手アイコン）。負荷軽減で1フレームおき
+      if (handOn && frameCount % 2 === 0) processHands(performance.now());
+      else if (!handOn) liveHands = [];
+    } else {
+      processHands(performance.now());
+    }
     update();
     render();
   }
@@ -854,10 +862,10 @@ document.getElementById("hand").addEventListener("click", () => {
   btn.setAttribute("aria-pressed", handOn ? "true" : "false");
   if (handOn) {
     if (!handLandmarker && camReady) loadHands();
-    toast("手で あやつる：オン");
+    toast(drawMode ? "描画中のジェスチャー：オン" : "手で あやつる：オン");
   } else {
     liveHands = [];
-    toast("手で あやつる：オフ（指で描けます）");
+    toast(drawMode ? "描画中のジェスチャー：オフ" : "手で あやつる：オフ（指で描けます）");
   }
 });
 
@@ -894,7 +902,7 @@ document.getElementById("reset").addEventListener("click", () => {
   clearArt();
   toast(drawMode ? "絵を消しました" : "消しました");
 });
-document.getElementById("save").addEventListener("click", () => {
+function downloadCanvas(okMsg) {
   try {
     stage.toBlob((blob) => {
       if (!blob) { toast("スクショで保存してね"); return; }
@@ -903,9 +911,22 @@ document.getElementById("save").addEventListener("click", () => {
       a.href = url; a.download = "hikari-nazori-" + Date.now() + ".png";
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 4000);
-      toast("画像を保存しました");
+      toast(okMsg);
     }, "image/png");
   } catch (err) { toast("スクショで保存してね"); }
+}
+document.getElementById("save").addEventListener("click", () => downloadCanvas("画像を保存しました"));
+
+// カメラシャッター：フラッシュ＋シャッター音＋撮影（今の合成画像を保存）
+const flashEl = document.getElementById("flash");
+document.getElementById("shutter").addEventListener("click", () => {
+  Sound.kick();
+  // 先に今フレームを撮ってから演出（フラッシュは画像に写り込まない）
+  downloadCanvas("撮影しました");
+  Sound.shutter();
+  flashEl.classList.remove("fire");
+  void flashEl.offsetWidth; // リフローでアニメ再起動
+  flashEl.classList.add("fire");
 });
 
 // ===================================================================
@@ -1046,7 +1067,24 @@ const Sound = (() => {
     calm() { voice(pal.root / 2, { type: "sine", dur: 1.8, gain: 0.10, attack: 0.12, wet: pal.wet + 0.2, voices: 2, sub: true, bright: 1300 }); voice(pal.root, { type: "sine", dur: 1.6, gain: 0.06, attack: 0.18, wet: pal.wet + 0.2, voices: 2, bright: 1600 }); },
     push() { voice(pal.root, { type: pal.type, dur: 1.0, gain: 0.12, glide: 2.0, attack: 0.03, wet: pal.wet + 0.2, voices: 3, sub: true, bright: 2400 }); },
     pull() { voice(pal.root * 2, { type: "sine", dur: 1.1, gain: 0.08, glide: 0.45, attack: 0.03, wet: pal.wet + 0.3, voices: 2, bright: 3600 }); },
-    star() { for (let i = 0; i < 4; i++) voice(pal.scale[i] * 2, { type: "triangle", dur: 0.9, gain: 0.06, attack: 0.004, wet: pal.wet + 0.2, voices: 2, bright: 5200, when: i * 0.08 }); }
+    star() { for (let i = 0; i < 4; i++) voice(pal.scale[i] * 2, { type: "triangle", dur: 0.9, gain: 0.06, attack: 0.004, wet: pal.wet + 0.2, voices: 2, bright: 5200, when: i * 0.08 }); },
+    // シャッター：やわらかいクリック（短いノイズ）＋確認のひと音
+    shutter() {
+      if (!actx || !on) return;
+      const t = actx.currentTime;
+      // 短いノイズのクリック
+      const len = Math.floor(actx.sampleRate * 0.06);
+      const buf = actx.createBuffer(1, len, actx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+      const src = actx.createBufferSource(); src.buffer = buf;
+      const bp = actx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2600; bp.Q.value = 0.8;
+      const ng = actx.createGain(); ng.gain.value = 0.18;
+      src.connect(bp); bp.connect(ng); ng.connect(master);
+      src.start(t); src.stop(t + 0.08);
+      // 上品な確認音
+      voice(pal.scale[2] * 2, { type: "sine", dur: 0.5, gain: 0.07, attack: 0.003, wet: pal.wet + 0.15, voices: 1, bright: 6000, when: 0.04 });
+    }
   };
 })();
 
