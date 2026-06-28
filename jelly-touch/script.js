@@ -41,6 +41,7 @@
   const ang = new Float32Array(N);
   const r = new Float32Array(N);   // 静止半径からの変位
   const v = new Float32Array(N);   // 変位の速度
+  const rest = new Float32Array(N); // いま目指す形（押し込み/伸びをここに入れる）
   for (let i = 0; i < N; i++) ang[i] = (i / N) * Math.PI * 2;
 
   let cx = 0, cy = 0;     // 中央
@@ -182,10 +183,11 @@
     downX = curX = p.x;
     downY = curY = p.y;
     downT = performance.now();
-    // 押した瞬間に軽くぷにっ
+    // 押した瞬間に軽くぷにっ（あとは押している間ぐっと凹む）
     const theta = Math.atan2(p.y - (cy + oy), p.x - (cx + ox));
-    poke(theta, 5, 0.7);
-    blip(420, 0.04);
+    poke(theta, 4, 0.6);
+    buzz(7);
+    blip(360, 0.03);
     longTimer = window.setTimeout(() => {
       if (active && moved < 16) {
         mode = "long";
@@ -217,23 +219,25 @@
 
     if (mode === "drag") {
       registerDrag();
-      // 離した瞬間：ぷるんと戻る反動
-      const theta = Math.atan2(curY - (cy + oy), curX - (cx + ox));
-      poke(theta + Math.PI, 6, 1.1);
-      ovx += (cx - (cx + ox)) * 0; // オフセットは spring で戻る
-      blip(520, 0.05);
+      // 離した瞬間：本体オフセットも点もばねでぷるんと戻る
+      buzz(16);
+      blip(440, 0.055);
     } else if (mode === "long" && longHeld) {
       registerLong();
       bounce(1);
       stampRipple(cx + ox, baseY, hueColor(0.5));
-      blip(660, 0.06);
+      buzz(22);
+      blip(560, 0.06);
     } else {
       registerTap(held);
+      // 離した瞬間：押し込んだ所が外へぷるんと跳ね返る
       const theta = Math.atan2(curY - (cy + oy), curX - (cx + ox));
-      poke(theta, 7, 0.6);
+      poke(theta, -7, 0.55);   // マイナス＝外向きに弾ける
+      squashV -= 0.3;
+      buzz(13);
       stampRipple(curX, curY, hueColor(0.4));
       spawnPop(curX, curY);
-      blip(560 + Math.random() * 120, 0.05);
+      blip(540 + Math.random() * 100, 0.055);
     }
     mode = null;
   }
@@ -342,6 +346,7 @@
       hideIntro();
       jiggle(Math.min(1.4, delta / 16));
       registerShake();
+      buzz(10);
       blip(480, 0.04);
     }
   }
@@ -371,6 +376,7 @@
     hideIntro();
     jiggle(1);
     registerShake();
+    buzz(12);
     blip(470, 0.05);
   });
 
@@ -402,6 +408,7 @@
     jiggleBtn.style.pointerEvents = "none";
     finishPhase = 1;
     finishT = performance.now();
+    buzz([0, 18, 60, 40]);
   }
 
   function runFinish(now) {
@@ -545,29 +552,49 @@
   // ====================================================================
   function physics(dt) {
     const stiff = 220 * personality.wob;   // ばね定数（揺れやすさ）
-    const damp = 4.2;                       // 減衰
+    const damp = 3.4;                       // 減衰（小さいほどぷるぷる余韻が長い）
     const spread = 0.34;                    // 隣どうしの伝播（波）
 
-    // ドラッグ中：指の方向へぐにーっと伸ばす（弾力で抵抗）
-    if (active && (mode === "drag")) {
-      const fx = curX - (cx + ox);
-      const fy = curY - (cy + oy);
-      const pullMag = Math.hypot(fx, fy);
-      const pullAng = Math.atan2(fy, fx);
-      // 伸びすぎ前に抵抗：tanh で頭打ち
-      const reach = Math.tanh(pullMag / (R * 1.3)) * R * 0.95;
+    // いま目指す形（rest）を毎フレーム作り直す。ばねはこの形へ向かう。
+    rest.fill(0);
+
+    // ドラッグ中：指に吸い付いて、引っ張るほどぐにーっと伸びる（頭打ちなし）
+    if (active && mode === "drag") {
+      const fx = curX - cx;   // 指（静止中心からの位置）
+      const fy = curY - cy;
+      // 本体は指へ大きく追従。spring の遅れがそのまま弾力になる
+      const bodyFollow = 0.55;
+      ovx += (fx * bodyFollow - ox) * 55 * dt;
+      ovy += (fy * bodyFollow - oy) * 55 * dt;
+      // 先端は「本体中心→指」のすき間ぶん伸びる＝指へ届こうとする
+      const lagx = curX - (cx + ox);
+      const lagy = curY - (cy + oy);
+      const lag = Math.hypot(lagx, lagy);
+      const stretchAng = Math.atan2(lagy, lagx);
+      const stretchAmt = Math.min(lag * 1.15, R * 2.0); // 引っ張るほど伸びる
       for (let i = 0; i < N; i++) {
-        let dA = ang[i] - pullAng;
+        let dA = ang[i] - stretchAng;
         while (dA > Math.PI) dA -= Math.PI * 2;
         while (dA < -Math.PI) dA += Math.PI * 2;
         const c = Math.cos(dA);
-        const wf = c > 0 ? c * c : -0.25 * c * c; // 近い側は伸び、遠い側は少し凹む
-        const tgt = wf * reach;
-        v[i] += (tgt - r[i]) * 16 * dt;
+        const wf = c > 0 ? c * c * c : -0.18 * c * c; // 近い側だけ大きく伸び、反対側は軽く締まる
+        rest[i] = wf * stretchAmt;
       }
-      // 本体も少し指へ付いていく（ぬるっと）
-      ovx += (fx * 0.18 - ox) * 12 * dt;
-      ovy += (fy * 0.18 - oy) * 12 * dt;
+    }
+    // タップ（押している間）：接点をぐっと押し込み続ける → 離すと跳ね返る
+    else if (active && mode === "tap") {
+      const theta = Math.atan2(curY - (cy + oy), curX - (cx + ox));
+      const held = performance.now() - downT;
+      const depth = Math.min(R * 0.45, R * 0.45 * (held / 140));
+      for (let i = 0; i < N; i++) {
+        let dA = ang[i] - theta;
+        while (dA > Math.PI) dA -= Math.PI * 2;
+        while (dA < -Math.PI) dA += Math.PI * 2;
+        const w = Math.exp(-(dA * dA) / (2 * 0.5 * 0.5));
+        rest[i] = -depth * w;          // 接点を凹ませ、反対側は少しふくらむ
+        rest[i] += depth * 0.12 * Math.max(0, -Math.cos(dA));
+      }
+      squashV += (0.06 - squash) * 14 * dt;
     }
     // 長押し中：むにっと沈む
     if (active && mode === "long" && longHeld) {
@@ -575,12 +602,12 @@
       oy += (Math.min(R * 0.18, 22) - oy) * 6 * dt;
     }
 
-    // リングばね
+    // リングばね（rest の形へ向かう。離すと rest=0 に戻りぷるん）
     for (let i = 0; i < N; i++) {
       const left = r[(i - 1 + N) % N];
       const right = r[(i + 1) % N];
       const neighbor = (left + right) * 0.5 - r[i];
-      let f = -stiff * r[i] + spread * stiff * neighbor;
+      let f = -stiff * (r[i] - rest[i]) + spread * stiff * neighbor;
       v[i] += f * dt;
       v[i] *= Math.exp(-damp * dt);
       r[i] += v[i] * dt;
@@ -588,11 +615,11 @@
 
     // 全体オフセットのばね戻り（ぷるん）
     if (!(active && mode === "drag")) {
-      ovx += (-ox) * 90 * dt;
-      ovy += (-oy) * 90 * dt;
+      ovx += (-ox) * 130 * dt;
+      ovy += (-oy) * 130 * dt;
     }
-    ovx *= Math.exp(-6 * dt);
-    ovy *= Math.exp(-6 * dt);
+    ovx *= Math.exp(-5 * dt);
+    ovy *= Math.exp(-5 * dt);
     ox += ovx * dt;
     oy += ovy * dt;
 
@@ -843,7 +870,7 @@
   function frame(now) {
     let dt = (now - last) / 1000;
     last = now;
-    if (dt > 0.05) dt = 0.05;   // タブ復帰などで飛ばない
+    if (dt > 0.034) dt = 0.034;   // タブ復帰などで飛ばない＆ばねの安定化
 
     easePersonality();
     if (finishPhase > 0 && finishPhase < 3) runFinish(now);
@@ -870,20 +897,45 @@
     }
     if (soundOn && audioCtx && audioCtx.state === "suspended") audioCtx.resume();
   });
+  // やわらかい「ぷるん／ぽよん」音：軽く跳ねるピッチ＋ビブラート＋ローパス
   function blip(freq, gain) {
     if (!soundOn || !audioCtx) return;
     const t = audioCtx.currentTime;
+    const base = freq;
     const o = audioCtx.createOscillator();
     const g = audioCtx.createGain();
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(2200, t);
+    lp.frequency.exponentialRampToValueAtTime(700, t + 0.22);
     o.type = "sine";
-    o.frequency.setValueAtTime(freq, t);
-    o.frequency.exponentialRampToValueAtTime(freq * 0.6, t + 0.18);
+    // ぴょこんと上がって落ちるピッチ（ボヨン感）
+    o.frequency.setValueAtTime(base * 0.75, t);
+    o.frequency.exponentialRampToValueAtTime(base * 1.18, t + 0.035);
+    o.frequency.exponentialRampToValueAtTime(base * 0.82, t + 0.2);
+    // ぷるぷるしたビブラート
+    const lfo = audioCtx.createOscillator();
+    const lfoG = audioCtx.createGain();
+    lfo.type = "sine";
+    lfo.frequency.setValueAtTime(24, t);
+    lfoG.gain.setValueAtTime(base * 0.05, t);
+    lfo.connect(lfoG).connect(o.frequency);
+    const vol = (gain || 0.05) * 1.1;
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(gain || 0.05, t + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
-    o.connect(g).connect(audioCtx.destination);
+    g.gain.linearRampToValueAtTime(vol, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.26);
+    o.connect(lp).connect(g).connect(audioCtx.destination);
     o.start(t);
-    o.stop(t + 0.24);
+    lfo.start(t);
+    o.stop(t + 0.3);
+    lfo.stop(t + 0.3);
+  }
+
+  // スマホの触覚（対応端末のみ。iOS Safari は無反応だが無害）
+  function buzz(pattern) {
+    if (navigator.vibrate) {
+      try { navigator.vibrate(pattern); } catch (_) {}
+    }
   }
 
   // ====================================================================
