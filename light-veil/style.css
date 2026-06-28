@@ -1,0 +1,276 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: #04100c;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Hiragino Sans", "Noto Sans JP", sans-serif;
+  color: #eafff4;
+  overscroll-behavior: none;
+}
+
+#wrap {
+  position: fixed;
+  inset: 0;
+}
+
+#stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none; /* なぞりを最優先。スクロール／ピンチを無効化 */
+}
+
+/* 背景メディアは画面に出さず、キャンバスへ転写するためだけに使う */
+#cam {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- 初回ガイド ---- */
+#intro {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: opacity 0.7s ease;
+  z-index: 6;
+}
+#intro.hide {
+  opacity: 0;
+}
+.introInner {
+  text-align: center;
+  transform: translateY(-4vh);
+  padding: 0 24px;
+}
+.introText {
+  font-size: clamp(18px, 5.6vw, 24px);
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: rgba(255, 255, 255, 0.94);
+  text-shadow: 0 0 18px rgba(80, 255, 200, 0.5);
+}
+.introSub {
+  margin-top: 10px;
+  font-size: clamp(12px, 3.6vw, 14px);
+  letter-spacing: 1px;
+  color: rgba(220, 255, 240, 0.6);
+}
+.orb {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 22px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 38% 34%,
+    rgba(255, 255, 255, 0.95),
+    rgba(110, 255, 200, 0.85) 35%,
+    rgba(40, 200, 170, 0.2) 70%,
+    transparent 75%
+  );
+  box-shadow: 0 0 36px rgba(90, 255, 200, 0.7);
+  animation: orbPulse 2.6s ease-in-out infinite;
+}
+@keyframes orbPulse {
+  0%, 100% { transform: scale(1); opacity: 0.92; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+
+/* ---- カメラ／写真の案内ゲート ---- */
+#gate {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 14, 11, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 20;
+  padding: 24px;
+}
+#gate.hidden {
+  display: none;
+}
+.gateCard {
+  width: 100%;
+  max-width: 340px;
+  text-align: center;
+  border: 0.5px solid rgba(120, 255, 210, 0.25);
+  border-radius: 20px;
+  padding: 28px 22px;
+  background: rgba(12, 30, 24, 0.7);
+}
+.gateTitle {
+  font-size: clamp(17px, 5vw, 20px);
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.gateText {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(220, 255, 240, 0.7);
+}
+.gateBtns {
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gateBtn {
+  appearance: none;
+  border: 0.5px solid rgba(150, 255, 220, 0.35);
+  background: rgba(255, 255, 255, 0.05);
+  color: #eafff4;
+  border-radius: 999px;
+  padding: 13px 18px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: transform 0.12s, background 0.12s;
+}
+.gateBtn:active {
+  transform: scale(0.97);
+}
+.gateBtn.primary {
+  background: linear-gradient(120deg, rgba(70, 230, 180, 0.9), rgba(60, 200, 220, 0.9));
+  color: #042018;
+  border-color: transparent;
+}
+.gateNote {
+  margin-top: 16px;
+  min-height: 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 210, 160, 0.85);
+}
+
+/* ---- トースト ---- */
+#toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(118px + env(safe-area-inset-bottom));
+  transform: translateX(-50%) translateY(8px);
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(8, 24, 18, 0.82);
+  border: 0.5px solid rgba(150, 255, 220, 0.3);
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  color: #eafff4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s, transform 0.3s;
+  z-index: 15;
+  white-space: nowrap;
+}
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ---- 右上ユーティリティ ---- */
+#util {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  right: 14px;
+  display: flex;
+  gap: 10px;
+  z-index: 10;
+}
+.iconBtn {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 0.5px solid rgba(160, 255, 225, 0.28);
+  background: rgba(8, 24, 18, 0.5);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: rgba(230, 255, 245, 0.9);
+  cursor: pointer;
+  transition: transform 0.12s, background 0.12s;
+}
+.iconBtn:active {
+  transform: scale(0.92);
+  background: rgba(70, 230, 180, 0.25);
+}
+
+/* ---- 画面下部ドック ---- */
+#dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px calc(14px + env(safe-area-inset-bottom));
+  z-index: 10;
+  pointer-events: none; /* 透明な余白でなぞりを邪魔しない */
+}
+#source,
+#modes {
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  border-radius: 999px;
+  background: rgba(8, 24, 18, 0.5);
+  border: 0.5px solid rgba(160, 255, 225, 0.2);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+.src,
+.mode {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(225, 255, 245, 0.72);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.src.is-active,
+.mode.is-active {
+  color: #042018;
+  background: linear-gradient(120deg, rgba(120, 255, 200, 0.95), rgba(90, 220, 230, 0.95));
+}
+
+/* PC では少しだけ余白を広げて操作しやすく */
+@media (min-width: 720px) and (pointer: fine) {
+  .src,
+  .mode {
+    padding: 9px 20px;
+    font-size: 14px;
+  }
+}
