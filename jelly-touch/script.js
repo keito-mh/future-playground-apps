@@ -95,6 +95,7 @@
   // ---- ゼリーの「個性」（触るほど育つ）----
   const personality = {
     hue: 200,        // 色相
+    accent: 230,     // もう一色（二色グラデ・きみだけの配色に）
     sat: 62,         // 彩度
     light: 72,       // 明るさ
     alpha: 0.5,      // 透明感（小さいほど澄む）
@@ -102,9 +103,22 @@
     milky: 0,        // ミルキー寄り（0..1）
     glow: 0.3,       // 光り方（0..1）
     wob: 1,          // 揺れやすさ（もちもちで下がる）
+    lobe: 0,         // 輪郭のくせ（0..1 触るほど自分だけの形に）
+    star: 0,         // 光の粒が星形になる度合い（0..1）
   };
   // 目標値（じわっと近づく）
   const target = Object.assign({}, personality);
+
+  // ---- きみだけの輪郭（低周波のうねり。触り方で形がちがってくる）----
+  const shapeOff = new Float32Array(N);   // 現在の輪郭くせ
+  const shapeTgt = new Float32Array(N);   // 目標の輪郭くせ
+  let lobeA = 3, lobeB = 2, phA = 0, phB = 0;
+  function updateTraits() {
+    lobeA = 3 + (stats.drag % 3);          // 3..5
+    lobeB = 2 + (stats.shake % 4);         // 2..5
+    phA = stats.tap * 0.7 + stats.combo * 0.4;
+    phB = stats.longpress * 0.9 + stats.shake * 0.5;
+  }
 
   // ---- 操作の傾向カウント ----
   const stats = { tap: 0, drag: 0, longpress: 0, shake: 0, combo: 0 };
@@ -135,10 +149,10 @@
   function jiggle(power) {
     power = power || 1;
     const phase = Math.random() * Math.PI * 2;
-    const lobes = 2 + Math.floor(Math.random() * 3);
+    const lobes = 3 + Math.floor(Math.random() * 4);   // 細かいさざ波で「プルルルン」
     for (let i = 0; i < N; i++) {
       v[i] += Math.sin(ang[i] * lobes + phase) * 9 * power;
-      v[i] += (Math.random() - 0.5) * 4 * power;
+      v[i] += (Math.random() - 0.5) * 5 * power;
     }
     ovx += (Math.random() - 0.5) * 60 * power;
     ovy += (Math.random() - 0.5) * 60 * power;
@@ -162,6 +176,7 @@
   //  入力処理
   // ====================================================================
   let active = false;        // ポインタが押されているか
+  let grabbed = false;       // ゼリーに触れて掴んでいるか（外側スタートは掴まない）
   let mode = null;           // "tap" | "drag" | "long"
   let downX = 0, downY = 0, downT = 0;
   let curX = 0, curY = 0;
@@ -169,10 +184,22 @@
   let longTimer = 0;
   let longHeld = false;
   let pid = null;
+  let dragSpeed = 0;         // 直近のドラッグ速度（フリックの判定に使う）
 
   function localPoint(e) {
     const rect = canvas.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  // その座標がゼリーの内側か（変形・うねりも考慮、少し甘め）
+  function insideJelly(x, y) {
+    const dx = x - (cx + ox), dy = y - (cy + oy);
+    const a = Math.atan2(dy, dx);
+    let idx = Math.round(((a + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * N) % N;
+    const sx = 1 + squash, sy = 1 - squash;
+    const rad = R + r[idx] + shapeOff[idx];
+    const ex = Math.cos(a) * rad * sx, ey = Math.sin(a) * rad * sy;
+    return Math.hypot(dx, dy) <= Math.hypot(ex, ey) * 1.1 + 14;
   }
 
   function onDown(e) {
@@ -189,17 +216,23 @@
     downX = curX = p.x;
     downY = curY = p.y;
     downT = performance.now();
+    grabbed = insideJelly(p.x, p.y);
+    if (!grabbed) {
+      // ゼリーの外から押した時は本体に触らない（背景に小さな波紋だけ）
+      stampRipple(p.x, p.y, hueColor(0.25));
+      return;
+    }
     // 押した瞬間に軽くぷにっ（あとは押している間ぐっと凹む）
     const theta = Math.atan2(p.y - (cy + oy), p.x - (cx + ox));
     poke(theta, 4, 0.6);
     buzz(7);
-    blip(360, 0.03);
+    touchSound("press");
     longTimer = window.setTimeout(() => {
-      if (active && moved < 16) {
+      if (active && grabbed && moved < 16) {
         mode = "long";
         longHeld = true;
         target.alpha = Math.max(0.28, target.alpha - 0.05);
-        blip(300, 0.05);
+        touchSound("long");
       }
     }, 280);
   }
@@ -209,9 +242,10 @@
     const p = localPoint(e);
     const dx = p.x - curX, dy = p.y - curY;
     moved += Math.hypot(dx, dy);
+    dragSpeed = dragSpeed * 0.6 + Math.hypot(dx, dy) * 0.4;
     curX = p.x;
     curY = p.y;
-    if (mode !== "long" && moved > 16) mode = "drag";
+    if (grabbed && mode !== "long" && moved > 16) mode = "drag";
   }
 
   function onUp(e) {
@@ -221,30 +255,35 @@
     if (!active) return;
     active = false;
     window.clearTimeout(longTimer);
+    if (!grabbed) { mode = null; return; }   // 外側スタートは本体に作用しない
     const held = performance.now() - downT;
 
     if (mode === "drag") {
       registerDrag();
-      // 離した瞬間：本体オフセットも点もばねでぷるんと戻る
-      buzz(16);
-      blip(440, 0.055);
+      // 離した瞬間：ばねでぷるんと戻る。素早く引いた（フリック）ほど大きく弾む
+      const flick = Math.min(1.1, dragSpeed * 0.08);
+      jiggle(0.25 + flick * 0.6);
+      buzz(14 + Math.round(flick * 14));
+      touchSound("drag");
     } else if (mode === "long" && longHeld) {
       registerLong();
       bounce(1);
       stampRipple(cx + ox, baseY, hueColor(0.5));
       buzz(22);
-      blip(560, 0.06);
+      touchSound("long");
     } else {
       registerTap(held);
-      // 離した瞬間：押し込んだ所が外へぷるんと跳ね返る
+      // 離した瞬間：押し込んだ所が外へぷるんと跳ね返る（長く押すほど強く）
       const theta = Math.atan2(curY - (cy + oy), curX - (cx + ox));
-      poke(theta, -7, 0.55);   // マイナス＝外向きに弾ける
-      squashV -= 0.3;
+      const popStr = 7 + Math.min(8, held / 36);
+      poke(theta, -popStr, 0.55);   // マイナス＝外向きに弾ける
+      squashV -= 0.28 + Math.min(0.25, held / 800);
       buzz(13);
       stampRipple(curX, curY, hueColor(0.4));
       spawnPop(curX, curY);
-      blip(540 + Math.random() * 100, 0.055);
+      touchSound("tap");
     }
+    dragSpeed = 0;
     mode = null;
   }
 
@@ -268,16 +307,19 @@
     const now = performance.now();
     if (now - lastTapTime < 420) {
       stats.combo++;
-      // 連続タップ：きらきら粒が増える
+      // 連続タップ：きらきら粒（星）が増える
       target.glow = Math.min(1, target.glow + 0.05);
+      target.star = Math.min(1, target.star + 0.06);
       if (sparks.length < 46) { addSpark(); addSpark(); }
     }
     lastTapTime = now;
     // タップ：明るいソーダ系へ、泡が増える
     target.hue = wrapHue(target.hue + (185 - target.hue) * 0.04 + 3);
+    target.accent = wrapHue(target.hue + 34);   // ソーダのハイライト色
     target.light = Math.min(80, target.light + 0.6);
     target.milky = Math.max(0, target.milky - 0.02);
     if (bubbles.length < 30 && Math.random() < 0.8) addBubble();
+    growTraits();
     bumpGrowth(0.05);
   }
 
@@ -287,7 +329,10 @@
     target.milky = Math.min(1, target.milky + 0.08);
     target.wob = Math.max(0.62, target.wob - 0.03);
     target.hue = wrapHue(target.hue + (335 - target.hue) * 0.015);
+    target.accent += (target.hue - target.accent) * 0.2;  // 単色ミルキー寄り
     target.sat = Math.max(40, target.sat - 1.2);
+    target.star = Math.max(0, target.star - 0.02);
+    growTraits();
     bumpGrowth(0.06);
   }
 
@@ -297,16 +342,26 @@
     target.alpha = Math.max(0.24, target.alpha - 0.04);
     target.sat = Math.max(38, target.sat - 1.5);
     target.glow = Math.max(0.15, target.glow - 0.02);
+    target.accent += (target.hue - target.accent) * 0.15;  // 静かな単色
+    growTraits();
     bumpGrowth(0.06);
   }
 
   function registerShake() {
     stats.shake++;
-    // シェイク：色が混ざり、虹色寄りに
+    // シェイク：色が混ざり、虹色寄りに（二色グラデが大きく開く）
     target.rainbow = Math.min(1, target.rainbow + 0.06);
     target.hue = wrapHue(target.hue + 14);
+    target.accent = wrapHue(target.hue + 110);
     target.glow = Math.min(1, target.glow + 0.02);
+    growTraits();
     bumpGrowth(0.045);
+  }
+
+  // 触るほど「自分だけの形」が育つ（輪郭のくせを少しずつ強める）
+  function growTraits() {
+    target.lobe = Math.min(0.85, totalTouches() / 26);
+    updateTraits();
   }
 
   // ---- タップ時に泡がふわっと出る ----
@@ -353,7 +408,7 @@
       jiggle(Math.min(1.4, delta / 16));
       registerShake();
       buzz(10);
-      blip(480, 0.04);
+      touchSound("shake");
     }
   }
   function enableMotion() {
@@ -383,7 +438,7 @@
     jiggle(1);
     registerShake();
     buzz(12);
-    blip(470, 0.05);
+    touchSound("shake");
   });
 
   finishBtn.addEventListener("click", doFinish);
@@ -514,8 +569,11 @@
     ripples.length = 0;
     floaters.length = 0;
     for (let i = 0; i < 5; i++) addBubble();
-    Object.assign(personality, { hue: 200, sat: 62, light: 72, alpha: 0.5, rainbow: 0, milky: 0, glow: 0.3, wob: 1 });
+    Object.assign(personality, { hue: 200, accent: 230, sat: 62, light: 72, alpha: 0.5, rainbow: 0, milky: 0, glow: 0.3, wob: 1, lobe: 0, star: 0 });
     Object.assign(target, personality);
+    shapeOff.fill(0);
+    shapeTgt.fill(0);
+    lobeA = 3; lobeB = 2; phA = 0; phB = 0;
     growth = 0;
     meterFill.style.width = "0%";
     meterWrap.classList.remove("show");
@@ -546,19 +604,31 @@
     personality.milky += (target.milky - personality.milky) * k;
     personality.glow += (target.glow - personality.glow) * k;
     personality.wob += (target.wob - personality.wob) * k;
+    personality.lobe += (target.lobe - personality.lobe) * k;
+    personality.star += (target.star - personality.star) * k;
     // 色相は最短経路で
-    let dh = target.hue - personality.hue;
+    personality.hue = wrapHue(personality.hue + shortHue(target.hue - personality.hue) * k);
+    personality.accent = wrapHue(personality.accent + shortHue(target.accent - personality.accent) * k);
+
+    // きみだけの輪郭をゆっくり育てる
+    const amp = personality.lobe * R * 0.1;
+    for (let i = 0; i < N; i++) {
+      shapeTgt[i] = amp * (0.62 * Math.sin(ang[i] * lobeA + phA) + 0.38 * Math.sin(ang[i] * lobeB + phB));
+      shapeOff[i] += (shapeTgt[i] - shapeOff[i]) * 0.04;
+    }
+  }
+  function shortHue(dh) {
     while (dh > 180) dh -= 360;
     while (dh < -180) dh += 360;
-    personality.hue = wrapHue(personality.hue + dh * k);
+    return dh;
   }
 
   // ====================================================================
   //  物理ステップ
   // ====================================================================
   function physics(dt) {
-    const stiff = 220 * personality.wob;   // ばね定数（揺れやすさ）
-    const damp = 3.4;                       // 減衰（小さいほどぷるぷる余韻が長い）
+    const stiff = 340 * personality.wob;   // ばね定数（高いほど速い「プルルルン」）
+    const damp = 3.7;                       // 減衰（小さいほど余韻が長い）
     const spread = 0.34;                    // 隣どうしの伝播（波）
 
     // いま目指す形（rest）を毎フレーム作り直す。ばねはこの形へ向かう。
@@ -566,7 +636,7 @@
 
     // ドラッグ中：本体は指へほどよく追従し、指の方へ「細い舌」が伸びる。
     // 引っ張った所がふくらむのではなく、くびれて本体の体積は中心に残る。
-    if (active && mode === "drag") {
+    if (active && grabbed && mode === "drag") {
       const fx = curX - cx;   // 指（静止中心からの位置）
       const fy = curY - cy;
       // 本体は控えめに付いていく（spring の遅れが弾力に）。出すぎないよう低め。
@@ -591,7 +661,7 @@
       }
     }
     // タップ（押している間）：接点をぐっと押し込み続ける → 離すと跳ね返る
-    else if (active && mode === "tap") {
+    else if (active && grabbed && mode === "tap") {
       const theta = Math.atan2(curY - (cy + oy), curX - (cx + ox));
       const held = performance.now() - downT;
       const depth = Math.min(R * 0.45, R * 0.45 * (held / 140));
@@ -606,7 +676,7 @@
       squashV += (0.06 - squash) * 14 * dt;
     }
     // 長押し中：むにっと沈む
-    if (active && mode === "long" && longHeld) {
+    if (active && grabbed && mode === "long" && longHeld) {
       squashV += (0.26 - squash) * 30 * dt;
       oy += (Math.min(R * 0.18, 22) - oy) * 6 * dt;
     }
@@ -638,7 +708,7 @@
     extent = R + mx;
 
     // 全体オフセットのばね戻り（ぷるん）
-    if (!(active && mode === "drag")) {
+    if (!(active && grabbed && mode === "drag")) {
       ovx += (-ox) * 130 * dt;
       ovy += (-oy) * 130 * dt;
     }
@@ -663,7 +733,7 @@
   // ====================================================================
   function blobPoint(i, rScale) {
     const breath = Math.sin(breathe * 1.6 + i * 0.5) * R * 0.012;
-    const rad = (R + r[i] + breath) * (rScale || 1);
+    const rad = (R + r[i] + breath + shapeOff[i]) * (rScale || 1);
     const sx = 1 + squash;
     const sy = 1 - squash;
     const x = cx + ox + Math.cos(ang[i]) * rad * sx;
@@ -755,6 +825,7 @@
     ctx.shadowColor = `hsla(${wrapHue(h)},90%,80%,${0.25 + personality.glow * 0.5 + beatFlash * 0.25})`;
     ctx.shadowBlur = 24 + personality.glow * 36 + beatFlash * 22;
 
+    const ah = personality.accent;
     // 塗り：にじいろ なら円錐風グラデを近似（複数色の放射）
     let fill;
     if (personality.rainbow > 0.05) {
@@ -766,16 +837,17 @@
         fill.addColorStop(s / 5, `hsla(${hh},${sat}%,${light}%,${alpha})`);
       }
     } else {
-      const fr = Math.max(R * 1.35, extent * 1.1); // 伸びた先までグラデを届かせて段差を防ぐ
+      // 伸びた舌が暗くならないよう、コントラストは控えめ＆固定半径
+      const fr = R * 1.45;
       fill = ctx.createRadialGradient(
-        cx + ox - R * 0.32, cy + oy - R * 0.42, R * 0.15,
-        cx + ox + R * 0.1, cy + oy + R * 0.15, fr
+        cx + ox - R * 0.32, cy + oy - R * 0.42, R * 0.12,
+        cx + ox, cy + oy, fr
       );
       const milkBoost = personality.milky * 12;
-      fill.addColorStop(0, `hsla(${wrapHue(h + 12)},${sat - personality.milky * 18}%,${Math.min(97, light + 20 + milkBoost)}%,${alpha})`);
-      fill.addColorStop(0.45, `hsla(${h},${sat}%,${light + 4}%,${alpha})`);
-      fill.addColorStop(0.8, `hsla(${wrapHue(h - 8)},${sat + 4}%,${light - 8}%,${Math.min(1, alpha + 0.06)})`);
-      fill.addColorStop(1, `hsla(${wrapHue(h - 14)},${sat + 6}%,${light - 13}%,${Math.min(1, alpha + 0.12)})`);
+      // 上は基本色、ふち〜舌はアクセント色（二色グラデ＝きみだけの配色）
+      fill.addColorStop(0, `hsla(${wrapHue(h + 12)},${sat - personality.milky * 18}%,${Math.min(97, light + 18 + milkBoost)}%,${alpha})`);
+      fill.addColorStop(0.5, `hsla(${h},${sat}%,${light + 3}%,${alpha})`);
+      fill.addColorStop(1, `hsla(${wrapHue(ah)},${sat + 3}%,${light - 6}%,${Math.min(1, alpha + 0.07)})`);
     }
     ctx.fillStyle = fill;
     ctx.fill();
@@ -792,29 +864,30 @@
       mg.addColorStop(0, `hsla(${h},30%,97%,${0.5 * personality.milky})`);
       mg.addColorStop(1, "hsla(0,0%,100%,0)");
       ctx.fillStyle = mg;
-      ctx.fillRect(cx + ox - R, cy + oy - R, R * 2, R * 2);
+      ctx.fillRect(0, 0, W, H);
     }
 
-    // 立体感：上は明るく、底の内側はうっすら影
+    // 立体感：本体の内側だけをふんわり丸く陰影づけ（ふち手前で透明に戻すので舌に線が出ない）
     const ish = ctx.createRadialGradient(
-      cx + ox, cy + oy - R * 0.5, R * 0.2,
-      cx + ox, cy + oy + R * 0.35, R * 1.3
+      cx + ox, cy + oy - R * 0.1, R * 0.45,
+      cx + ox, cy + oy + R * 0.1, R * 1.02
     );
     ish.addColorStop(0, "hsla(0,0%,100%,0)");
-    ish.addColorStop(0.7, "hsla(0,0%,100%,0)");
-    ish.addColorStop(1, `hsla(${wrapHue(h - 20)},${sat + 8}%,${Math.max(32, light - 32)}%,0.5)`);
+    ish.addColorStop(0.62, "hsla(0,0%,100%,0)");
+    ish.addColorStop(0.86, `hsla(${wrapHue(ah - 10)},${sat + 8}%,${Math.max(34, light - 24)}%,0.28)`);
+    ish.addColorStop(1, "hsla(0,0%,100%,0)");
     ctx.fillStyle = ish;
-    ctx.fillRect(cx + ox - R * 1.2, cy + oy - R * 1.2, R * 2.4, R * 2.4);
+    ctx.fillRect(0, 0, W, H);
 
-    // 透過：底の内側に光が抜ける明るいにじみ（ゼリーらしさ）
+    // 透過：底の内側に光が抜ける明るいにじみ（アクセント色でゼリーらしさ）
     const cg = ctx.createRadialGradient(
       cx + ox, cy + oy + R * 0.62, 0,
       cx + ox, cy + oy + R * 0.62, R * 0.85
     );
-    cg.addColorStop(0, `hsla(${wrapHue(h + 18)},100%,93%,${0.45 + personality.glow * 0.2})`);
+    cg.addColorStop(0, `hsla(${wrapHue(ah + 8)},100%,90%,${0.42 + personality.glow * 0.2})`);
     cg.addColorStop(1, "hsla(0,0%,100%,0)");
     ctx.fillStyle = cg;
-    ctx.fillRect(cx + ox - R, cy + oy - R, R * 2, R * 2);
+    ctx.fillRect(0, 0, W, H);
 
     drawBubbles(dt);
     drawSparks(dt);
@@ -832,7 +905,7 @@
     hl.addColorStop(0.4, "rgba(255,255,255,0.12)");
     hl.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = hl;
-    ctx.fillRect(cx + ox - R, cy + oy - R, R * 2, R * 2);
+    ctx.fillRect(0, 0, W, H);
     // 小さな光点
     ctx.beginPath();
     ctx.ellipse(cx + ox - R * 0.4, cy + oy - R * 0.52, R * 0.16, R * 0.1, -0.5, 0, Math.PI * 2);
@@ -876,6 +949,7 @@
 
   function drawSparks(dt) {
     const sx = 1 + squash, sy = 1 - squash;
+    const star = personality.star;   // 高いほど粒が星形に
     for (let i = 0; i < sparks.length; i++) {
       const s = sparks[i];
       s.tw += dt * s.ts;
@@ -884,11 +958,37 @@
       const px = cx + ox + Math.cos(s.a) * R * s.d * sx;
       const py = cy + oy + Math.sin(s.a) * R * s.d * sy;
       const rad = s.rad * (0.6 + tw * 0.8);
-      ctx.beginPath();
-      ctx.arc(px, py, rad, 0, Math.PI * 2);
       ctx.fillStyle = `hsla(${wrapHue(personality.hue + 40)},100%,95%,${0.4 + tw * 0.6})`;
-      ctx.fill();
+      if (star > 0.25) {
+        // きらきら：4方向にとがる光の粒
+        const len = rad * (1.6 + star * 1.4);
+        drawStar(px, py, len, rad * 0.5, s.tw * 0.3);
+      } else {
+        ctx.beginPath();
+        ctx.arc(px, py, rad, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
+  }
+  // 4方向にのびる光の粒（中心はまるく明るい）
+  function drawStar(x, y, len, w, rot) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    ctx.beginPath();
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2;
+      const ax = Math.cos(a), ay = Math.sin(a);
+      const px = -Math.sin(a), py = Math.cos(a);
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(px * w * 0.5 + ax * len * 0.4, py * w * 0.5 + ay * len * 0.4, ax * len, ay * len);
+      ctx.quadraticCurveTo(-px * w * 0.5 + ax * len * 0.4, -py * w * 0.5 + ay * len * 0.4, 0, 0);
+    }
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 0, w * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   function drawFloaters(dt) {
@@ -984,6 +1084,32 @@
   function buzz(pattern) {
     if (navigator.vibrate) {
       try { navigator.vibrate(pattern); } catch (_) {}
+    }
+  }
+
+  // 触ったときの音。おんがくONなら音階に乗った音＝触るほど曲になる（気持ちよさ加速）。
+  // おんがくOFFなら従来のやわらかい「ぷるん」。
+  const SCALE = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21]; // メジャーペンタ（必ず気持ちいい音）
+  let melodyStep = 0;
+  function touchSound(kind) {
+    if (musicOn && audioCtx) {
+      const t = audioCtx.currentTime;
+      if (kind === "tap" || kind === "release") {
+        const i = melodyStep++ % SCALE.length;          // 触るたびに音階を上っていく
+        playTone(semiHz(SCALE[i] + 12), t, 0.06, 0.45, "triangle");
+        if (stats.combo % 4 === 3) playTone(semiHz(SCALE[i] + 19), t, 0.03, 0.4, "sine"); // 連打でハモる
+      } else if (kind === "drag") {
+        playTone(semiHz(SCALE[(melodyStep++ % 4) + 1] + 12), t, 0.05, 0.55, "triangle");
+      } else if (kind === "long") {
+        playTone(semiHz(SCALE[0]), t, 0.06, 0.8, "sine");
+      } else if (kind === "shake") {
+        for (let k = 0; k < 3; k++) playTone(semiHz(SCALE[k + 2] + 12), t + k * 0.05, 0.045, 0.4, "triangle");
+      } else if (kind === "press") {
+        playTone(semiHz(SCALE[0] + 12), t, 0.025, 0.3, "sine");
+      }
+    } else if (soundOn) {
+      const map = { press: 360, release: 540, drag: 450, long: 560, shake: 480, tap: 540 };
+      blip((map[kind] || 500) + (kind === "tap" ? Math.random() * 90 : 0), kind === "press" ? 0.03 : 0.055);
     }
   }
 
