@@ -37,13 +37,22 @@
     layout();
   }
 
-  // ---- ゼリー本体（リングばねメッシュ）----
-  const N = 56;            // 輪郭の点の数
+  // ---- ゼリー本体（固有モードで揺れる擬似ソフトボディ）----
+  // 本物のゼリーは「固有モード（mode2=楕円, mode3, mode4…の定在波）」で鳴る。
+  // 各モードを減衰振動子にし、低いモードほどゆっくり・高いほど速く減衰させると、
+  // ぷるるん…と上品に収まる質感になる。
+  const N = 72;            // 輪郭の点の数（なめらかさ用）
   const ang = new Float32Array(N);
-  const r = new Float32Array(N);   // 静止半径からの変位
-  const v = new Float32Array(N);   // 変位の速度
-  const rest = new Float32Array(N); // いま目指す形（押し込み/伸びをここに入れる）
   for (let i = 0; i < N; i++) ang[i] = (i / N) * Math.PI * 2;
+
+  const MODES = [2, 3, 4, 5];        // 使う固有モード
+  const M = MODES.length;
+  const mc = new Float32Array(M);    // cos成分の振幅
+  const ms = new Float32Array(M);    // sin成分の振幅
+  const mcv = new Float32Array(M);   // その速度
+  const msv = new Float32Array(M);
+  let OMEGA0 = 12;                   // mode2 の基準角周波数
+  const ZETA = 0.12;                 // 減衰比（小さいほど長く鳴る・大きいほど締まる）
 
   let cx = 0, cy = 0;     // 中央
   let R = 120;            // 基本半径
@@ -52,10 +61,13 @@
 
   // 全体オフセット（ドラッグでぬるっと付いてくる）
   let ox = 0, oy = 0, ovx = 0, ovy = 0;
-  // 全体のスカッシュ（縦つぶれ / 横ひろがり）
+  // 全体のスカッシュ（縦つぶれ / 横ひろがり：長押し用）
   let squash = 0, squashV = 0;
-  // にじみ用の脈動位相
-  let breathe = 0;
+  // 押し込みのへこみ（タップ用：接点まわりの局所的なくぼみ）
+  let dent = 0, dentV = 0, dentAng = 0;
+  // 引っ張りの伸び（ドラッグ用：軸方向に体積保存で伸びる）
+  let stretch = 0, stretchV = 0, stAng = 0;
+  let breathe = 0;        // 待機中のかすかな呼吸
 
   function layout() {
     cx = W / 2;
@@ -130,41 +142,41 @@
   let beatFlash = 0;       // 音楽の拍に合わせた発光（毎拍たかまり減衰）
 
   // ====================================================================
-  //  揺らす系のインパルス
+  //  揺らす系のインパルス（固有モードを励起する）
   // ====================================================================
 
-  // 指定角度を中心に、内側へ「ぷにっ」と押し込む
-  function poke(theta, strength, spread) {
-    spread = spread || 0.9;
-    for (let i = 0; i < N; i++) {
-      let dA = ang[i] - theta;
-      while (dA > Math.PI) dA -= Math.PI * 2;
-      while (dA < -Math.PI) dA += Math.PI * 2;
-      const w = Math.exp(-(dA * dA) / (2 * spread * spread));
-      v[i] -= strength * w;        // マイナス＝内側へ
+  // 角度 theta に振幅 amp の変形インパルスを与える（amp>0＝そこが外へふくらむ）。
+  // 低いモードほど強く乗せると、なめらかで上品な揺れになる。
+  function excite(theta, amp) {
+    for (let i = 0; i < M; i++) {
+      const k = MODES[i];
+      const w = amp / k;
+      mcv[i] += w * Math.cos(k * theta);
+      msv[i] += w * Math.sin(k * theta);
     }
   }
 
   // 全体がぷるぷる震える（シェイク / ぷるぷるボタン）
   function jiggle(power) {
     power = power || 1;
-    const phase = Math.random() * Math.PI * 2;
-    const lobes = 3 + Math.floor(Math.random() * 4);   // 細かいさざ波で「プルルルン」
-    for (let i = 0; i < N; i++) {
-      v[i] += Math.sin(ang[i] * lobes + phase) * 9 * power;
-      v[i] += (Math.random() - 0.5) * 5 * power;
+    // ランダムな向きへ強めに一発＋各モードに散らす＝豊かなプルルルン
+    excite(Math.random() * Math.PI * 2, (Math.random() < 0.5 ? 1 : -1) * 0.16 * power);
+    for (let i = 0; i < M; i++) {
+      mcv[i] += (Math.random() - 0.5) * 0.5 * power / MODES[i];
+      msv[i] += (Math.random() - 0.5) * 0.5 * power / MODES[i];
     }
-    ovx += (Math.random() - 0.5) * 60 * power;
-    ovy += (Math.random() - 0.5) * 60 * power;
-    // 震えをためる（シェイクを続けると持続、止めると余韻でゆっくり収まる）
-    trembleAmp = Math.min(11, trembleAmp + 5 * power);
+    ovx += (Math.random() - 0.5) * 55 * power;
+    ovy += (Math.random() - 0.5) * 55 * power;
+    trembleAmp = Math.min(0.9, trembleAmp + 0.45 * power);
   }
 
   // 全体がふくらんで弾む（長押し離し）
   function bounce(power) {
-    for (let i = 0; i < N; i++) v[i] += 14 * power;
-    squashV -= 0.9 * power;
-    ovy -= 80 * power;
+    // 一様にふくらんでから戻る：mode2 を中心に上向きの跳ね
+    excite(Math.PI * 1.5, 0.12 * power);
+    mc[0] += 0.05 * power;
+    mcv[0] -= 0.4 * power;
+    ovy -= 70 * power;
   }
 
   // 背景の波紋スタンプ
@@ -191,15 +203,37 @@
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
-  // その座標がゼリーの内側か（変形・うねりも考慮、少し甘め）
+  // 角度 theta での、いまの輪郭の半径（モード変形＋うねり込み）
+  function modalFrac(theta) {
+    let f = 0;
+    for (let i = 0; i < M; i++) {
+      const k = MODES[i];
+      f += mc[i] * Math.cos(k * theta) + ms[i] * Math.sin(k * theta);
+    }
+    return f;
+  }
+  function radiusAt(theta) {
+    let rad = R * (1 + modalFrac(theta));
+    if (dent !== 0) {
+      let dA = theta - dentAng;
+      while (dA > Math.PI) dA -= Math.PI * 2;
+      while (dA < -Math.PI) dA += Math.PI * 2;
+      const ad = Math.abs(dA);
+      // 中心はぐっとへこみ、すぐ脇は押し出された分ふくらむ＝指で押した「ぷにっ」
+      rad += dent * Math.exp(-(dA * dA) / (2 * 0.36 * 0.36));
+      rad -= dent * 0.28 * Math.exp(-((ad - 0.62) * (ad - 0.62)) / (2 * 0.34 * 0.34));
+    }
+    return rad;
+  }
+
+  // その座標がゼリーの内側か（変形も考慮、少し甘め）
   function insideJelly(x, y) {
     const dx = x - (cx + ox), dy = y - (cy + oy);
     const a = Math.atan2(dy, dx);
-    let idx = Math.round(((a + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * N) % N;
     const sx = 1 + squash, sy = 1 - squash;
-    const rad = R + r[idx] + shapeOff[idx];
+    const rad = radiusAt(a) * (1 + Math.max(0, stretch) * 0.5);
     const ex = Math.cos(a) * rad * sx, ey = Math.sin(a) * rad * sy;
-    return Math.hypot(dx, dy) <= Math.hypot(ex, ey) * 1.1 + 14;
+    return Math.hypot(dx, dy) <= Math.hypot(ex, ey) * 1.1 + 16;
   }
 
   function onDown(e) {
@@ -224,7 +258,8 @@
     }
     // 押した瞬間に軽くぷにっ（あとは押している間ぐっと凹む）
     const theta = Math.atan2(p.y - (cy + oy), p.x - (cx + ox));
-    poke(theta, 4, 0.6);
+    dentAng = theta;
+    excite(theta, -0.03);
     buzz(7);
     touchSound("press");
     longTimer = window.setTimeout(() => {
@@ -273,11 +308,11 @@
       touchSound("long");
     } else {
       registerTap(held);
-      // 離した瞬間：押し込んだ所が外へぷるんと跳ね返る（長く押すほど強く）
+      // 離した瞬間：へこみが戻りつつ、その点から外へぷるんと弾けて全体が鳴る
       const theta = Math.atan2(curY - (cy + oy), curX - (cx + ox));
-      const popStr = 7 + Math.min(8, held / 36);
-      poke(theta, -popStr, 0.55);   // マイナス＝外向きに弾ける
-      squashV -= 0.28 + Math.min(0.25, held / 800);
+      const popAmp = 0.07 + Math.min(0.12, held / 1400);
+      excite(theta, popAmp);       // 外向きに弾ける
+      dentV += 0.6;                // へこみが勢いよく戻る
       buzz(13);
       stampRipple(curX, curY, hueColor(0.4));
       spawnPop(curX, curY);
@@ -477,13 +512,13 @@
     if (finishPhase === 1) {
       // ぎゅっと縮む
       squash = Math.min(0.42, squash + 0.02);
-      for (let i = 0; i < N; i++) v[i] -= 0.6;
       if (t > 360) { finishPhase = 2; finishT = now; bigBloom(); }
     } else if (finishPhase === 2) {
       // 大きくぷるん
       if (t < 20) {
-        for (let i = 0; i < N; i++) v[i] += 26;
-        squashV -= 1.4;
+        squashV -= 1.6;
+        excite(Math.PI * 1.5, 0.22);
+        mc[0] += 0.08;
         for (let k = 0; k < 10; k++) addSpark();
       }
       if (t > 520) { finishPhase = 3; finishT = now; showResult(); }
@@ -561,9 +596,10 @@
     growth = 0;
     finishReady = false;
     stats.tap = stats.drag = stats.longpress = stats.shake = stats.combo = 0;
-    for (let i = 0; i < N; i++) { r[i] = 0; v[i] = 0; }
+    mc.fill(0); ms.fill(0); mcv.fill(0); msv.fill(0);
     ox = oy = ovx = ovy = 0;
     squash = squashV = 0;
+    dent = dentV = 0; stretch = stretchV = 0; trembleAmp = 0;
     bubbles.length = 0;
     sparks.length = 0;
     ripples.length = 0;
@@ -627,104 +663,86 @@
   //  物理ステップ
   // ====================================================================
   function physics(dt) {
-    const stiff = 300 * personality.wob;   // ばね定数（高いほど速い「プルルルン」）
-    const damp = 3.7;                       // 減衰（小さいほど余韻が長い）
-    const spread = 0.34;                    // 隣どうしの伝播（波）
+    // --- 操作中の能動変形ターゲット ---
+    let stretchTarget = 0, dentTarget = 0, squashTarget = 0;
+    let oTargetX = 0, oTargetY = 0, following = false;
 
-    // いま目指す形（rest）を毎フレーム作り直す。ばねはこの形へ向かう。
-    rest.fill(0);
-
-    // ドラッグ中：本体は指へほどよく追従し、指の方へ「細い舌」が伸びる。
-    // 引っ張った所がふくらむのではなく、くびれて本体の体積は中心に残る。
     if (active && grabbed && mode === "drag") {
-      const fx = curX - cx;   // 指（静止中心からの位置）
-      const fy = curY - cy;
-      // 本体は控えめに付いていく（spring の遅れが弾力に）。出すぎないよう低め。
-      const bodyFollow = 0.4;
-      ovx += (fx * bodyFollow - ox) * 55 * dt;
-      ovy += (fy * bodyFollow - oy) * 55 * dt;
-      // 本体のふち〜指までのすき間を「舌」が橋渡しする（伸びすぎない量）
-      const lagx = curX - (cx + ox);
-      const lagy = curY - (cy + oy);
+      const fx = curX - cx, fy = curY - cy;
+      oTargetX = fx * 0.42; oTargetY = fy * 0.42; following = true;
+      const lagx = curX - (cx + ox), lagy = curY - (cy + oy);
       const lag = Math.hypot(lagx, lagy);
-      const stretchAng = Math.atan2(lagy, lagx);
-      const stretchAmt = Math.max(0, Math.min(lag - R * 0.85, R * 0.8));
-      for (let i = 0; i < N; i++) {
-        let dA = ang[i] - stretchAng;
-        while (dA > Math.PI) dA -= Math.PI * 2;
-        while (dA < -Math.PI) dA += Math.PI * 2;
-        const ad = Math.abs(dA);
-        const tip = Math.exp(-(dA * dA) / (2 * 0.34 * 0.34));        // 指へ細く伸びる舌
-        const neck = Math.exp(-((ad - 0.62) * (ad - 0.62)) / (2 * 0.34 * 0.34)); // 舌の根元をくびれさせる
-        const waist = Math.exp(-((ad - 1.5708) * (ad - 1.5708)) / (2 * 0.55 * 0.55)); // 横をしぼり体積を中心に保つ
-        rest[i] = tip * stretchAmt - neck * stretchAmt * 0.42 - waist * stretchAmt * 0.26;
-      }
-    }
-    // タップ（押している間）：接点をぐっと押し込み続ける → 離すと跳ね返る
-    else if (active && grabbed && mode === "tap") {
-      const theta = Math.atan2(curY - (cy + oy), curX - (cx + ox));
+      stAng = Math.atan2(lagy, lagx);
+      stretchTarget = Math.min(0.85, Math.max(0, (lag - R * 0.5) / R)); // 体積保存の伸び
+    } else if (active && grabbed && mode === "tap") {
+      dentAng = Math.atan2(curY - (cy + oy), curX - (cx + ox));
       const held = performance.now() - downT;
-      const depth = Math.min(R * 0.45, R * 0.45 * (held / 140));
-      for (let i = 0; i < N; i++) {
-        let dA = ang[i] - theta;
-        while (dA > Math.PI) dA -= Math.PI * 2;
-        while (dA < -Math.PI) dA += Math.PI * 2;
-        const w = Math.exp(-(dA * dA) / (2 * 0.5 * 0.5));
-        rest[i] = -depth * w;          // 接点を凹ませ、反対側は少しふくらむ
-        rest[i] += depth * 0.12 * Math.max(0, -Math.cos(dA));
-      }
-      squashV += (0.06 - squash) * 14 * dt;
+      dentTarget = -Math.min(R * 0.3, R * 0.3 * (held / 150));
     }
-    // 長押し中：むにっと沈む
     if (active && grabbed && mode === "long" && longHeld) {
-      squashV += (0.26 - squash) * 30 * dt;
-      oy += (Math.min(R * 0.18, 22) - oy) * 6 * dt;
+      squashTarget = 0.22; oTargetY = Math.min(R * 0.16, 20); following = true;
     }
 
-    // シェイクの細かい震え（持続中はぷるぷる、止めると余韻を残して減衰）
-    if (trembleAmp > 0.04) {
-      for (let i = 0; i < N; i++) v[i] += (Math.random() - 0.5) * trembleAmp;
-      ovx += (Math.random() - 0.5) * trembleAmp * 1.4;
-      ovy += (Math.random() - 0.5) * trembleAmp * 1.4;
-      trembleAmp *= Math.exp(-1.9 * dt);
+    // --- 本体オフセット（追従＆ばね戻り。離すと少しオーバーシュート＝ぷるん）---
+    if (following) {
+      ovx += (oTargetX - ox) * 55 * dt;
+      ovy += (oTargetY - oy) * 55 * dt;
     } else {
-      trembleAmp = 0;
+      ovx += (-ox) * 120 * dt;
+      ovy += (-oy) * 120 * dt;
+    }
+    ovx *= Math.exp(-5 * dt); ovy *= Math.exp(-5 * dt);
+    ox += ovx * dt; oy += ovy * dt;
+
+    // --- タップのへこみ：押している間は追従、離すとばねで0へ戻りぷるん ---
+    if (active && grabbed && mode === "tap") {
+      dent += (dentTarget - dent) * 22 * dt;
+      dentV = 0;
+    } else {
+      dentV += (0 - dent) * 240 * dt;
+      dentV *= Math.exp(-6 * dt);
+      dent += dentV * dt;
     }
 
-    // リングばね（rest の形へ向かう。離すと rest=0 に戻りぷるん）
-    for (let i = 0; i < N; i++) {
-      const left = r[(i - 1 + N) % N];
-      const right = r[(i + 1) % N];
-      const neighbor = (left + right) * 0.5 - r[i];
-      let f = -stiff * (r[i] - rest[i]) + spread * stiff * neighbor;
-      v[i] += f * dt;
-      v[i] *= Math.exp(-damp * dt);
-      r[i] += v[i] * dt;
-    }
+    // --- ドラッグの伸び：ばね振動子。離すと0へ戻りつつ少し弾む ---
+    stretchV += (stretchTarget - stretch) * 120 * dt;
+    stretchV *= Math.exp(-6 * dt);
+    stretch += stretchV * dt;
+    if (stretch < -0.25) { stretch = -0.25; stretchV *= 0.5; }
 
-    // いちばん外側までの距離（伸びた分の描画グラデを滑らかにするため）
-    let mx = 0;
-    for (let i = 0; i < N; i++) if (r[i] > mx) mx = r[i];
-    extent = R + mx;
-
-    // 全体オフセットのばね戻り（ぷるん）
-    if (!(active && grabbed && mode === "drag")) {
-      ovx += (-ox) * 130 * dt;
-      ovy += (-oy) * 130 * dt;
-    }
-    ovx *= Math.exp(-5 * dt);
-    ovy *= Math.exp(-5 * dt);
-    ox += ovx * dt;
-    oy += ovy * dt;
-
-    // スカッシュのばね戻り
-    if (!(active && mode === "long" && longHeld)) {
-      squashV += (-squash) * 120 * dt;
+    // --- 長押しのスカッシュ ---
+    if (active && grabbed && mode === "long" && longHeld) {
+      squashV += (squashTarget - squash) * 40 * dt;
+    } else {
+      squashV += (-squash) * 130 * dt;
     }
     squashV *= Math.exp(-7 * dt);
     squash += squashV * dt;
     squash = Math.max(-0.4, Math.min(0.5, squash));
 
+    // --- シェイクの細かい震え：モードに微小エネルギーを足し続け、余韻で減衰 ---
+    if (trembleAmp > 0.004) {
+      for (let i = 0; i < M; i++) {
+        mcv[i] += (Math.random() - 0.5) * trembleAmp / MODES[i];
+        msv[i] += (Math.random() - 0.5) * trembleAmp / MODES[i];
+      }
+      ovx += (Math.random() - 0.5) * trembleAmp * 48;
+      ovy += (Math.random() - 0.5) * trembleAmp * 48;
+      trembleAmp *= Math.exp(-1.9 * dt);
+    } else trembleAmp = 0;
+
+    // --- 固有モードの減衰振動（上品な「ぷるるん」の本体）---
+    const wobScale = 0.78 + 0.22 * personality.wob; // もちもちは少しゆっくり
+    for (let i = 0; i < M; i++) {
+      const k = MODES[i];
+      const w = OMEGA0 * (1 + 0.55 * (k - 2)) * wobScale; // 高いモードほど速い
+      const accC = -w * w * mc[i] - 2 * ZETA * w * mcv[i];
+      const accS = -w * w * ms[i] - 2 * ZETA * w * msv[i];
+      mcv[i] += accC * dt; msv[i] += accS * dt;
+      mc[i] += mcv[i] * dt; ms[i] += msv[i] * dt;
+    }
+
+    extent = R * (1 + Math.max(0, stretch)) + R * 0.12;
     breathe += dt;
   }
 
@@ -732,13 +750,35 @@
   //  描画
   // ====================================================================
   function blobPoint(i, rScale) {
-    const breath = Math.sin(breathe * 1.6 + i * 0.5) * R * 0.012;
-    const rad = (R + r[i] + breath + shapeOff[i]) * (rScale || 1);
-    const sx = 1 + squash;
-    const sy = 1 - squash;
-    const x = cx + ox + Math.cos(ang[i]) * rad * sx;
-    const y = cy + oy + Math.sin(ang[i]) * rad * sy;
-    return { x, y };
+    const theta = ang[i];
+    const breath = Math.sin(breathe * 1.0 + theta * 2) * 0.004; // ごく微かな呼吸（割合）
+    let rad = R * (1 + modalFrac(theta) + breath) + shapeOff[i];
+    if (dent !== 0) {
+      let dA = theta - dentAng;
+      while (dA > Math.PI) dA -= Math.PI * 2;
+      while (dA < -Math.PI) dA += Math.PI * 2;
+      const ad = Math.abs(dA);
+      // 中心はぐっとへこみ、すぐ脇は押し出された分ふくらむ＝指で押した「ぷにっ」
+      rad += dent * Math.exp(-(dA * dA) / (2 * 0.36 * 0.36));
+      rad -= dent * 0.28 * Math.exp(-((ad - 0.62) * (ad - 0.62)) / (2 * 0.34 * 0.34));
+    }
+    rad *= (rScale || 1);
+    let px = Math.cos(theta) * rad;
+    let py = Math.sin(theta) * rad;
+    // ドラッグの伸び（軸方向に体積保存で伸ばす）
+    if (stretch > 0.001 || stretch < -0.001) {
+      const e = 1 + stretch;
+      const p = 1 / Math.sqrt(Math.max(0.2, e));
+      const ux = Math.cos(stAng), uy = Math.sin(stAng);
+      const along = px * ux + py * uy;
+      const perpx = px - along * ux, perpy = py - along * uy;
+      px = along * e * ux + perpx * p;
+      py = along * e * uy + perpy * p;
+    }
+    // 長押しスカッシュ（縦つぶれ）
+    px *= (1 + squash);
+    py *= (1 - squash);
+    return { x: cx + ox + px, y: cy + oy + py };
   }
 
   function traceBlob(rScale) {
@@ -1163,8 +1203,8 @@
       if (now >= beatQ[i].t) {
         const strong = beatQ[i].strong;
         if (!finished) {
-          for (let k = 0; k < N; k++) v[k] += strong ? 4.2 : 2.0;
-          squashV -= strong ? 0.15 : 0.06;
+          squashV -= strong ? 0.16 : 0.07;   // 拍ごとにぷるんと脈動
+          mcv[0] += strong ? 0.22 : 0.1;
         }
         beatFlash = Math.max(beatFlash, strong ? 1 : 0.5);
         if (strong && sparks.length < 34 && !finished) addSpark();
