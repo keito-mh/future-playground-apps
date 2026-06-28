@@ -149,30 +149,43 @@
         note(880, { type: "sine", dur: 0.45, gain: 0.16, glide: 0.45, attack: 0.004, wet: 0.8 });
         note(1320, { type: "sine", dur: 0.18, gain: 0.06, glide: 0.5, attack: 0.003, wet: 0.5 });
       },
-      // 長押し：持続音をふわっと上げる
+      // 長押し：安定した和音がふわっと灯る（ピッチは動かさず＝不気味にならない）
       holdStart: function () {
         if (!actx || !on || hold) return;
         var t = actx.currentTime;
-        var g = actx.createGain();
-        g.gain.setValueAtTime(0.0001, t);
-        g.gain.exponentialRampToValueAtTime(0.10, t + 0.4);
-        var o = actx.createOscillator();
-        o.type = "sine"; o.frequency.setValueAtTime(330, t);
-        o.frequency.exponentialRampToValueAtTime(660, t + 2.2);
-        var lfo = actx.createOscillator(); var lg = actx.createGain();
-        lfo.frequency.value = 5.5; lg.gain.value = 6; lfo.connect(lg); lg.connect(o.frequency);
-        o.connect(g); g.connect(master);
-        if (send) { var s = actx.createGain(); s.gain.value = 0.7; g.connect(s); s.connect(send); }
-        o.start(t); lfo.start(t);
-        hold = { o: o, g: g, lfo: lfo };
+        var out = actx.createGain();
+        out.gain.setValueAtTime(0.0001, t);
+        out.gain.exponentialRampToValueAtTime(0.06, t + 0.5); // やわらかく立ち上げ
+        // やわらかいローパス（溜まるほど少しだけ明るく）
+        var lp = actx.createBiquadFilter();
+        lp.type = "lowpass"; lp.Q.value = 0.5;
+        lp.frequency.setValueAtTime(650, t);
+        lp.frequency.linearRampToValueAtTime(1500, t + 2.6);
+        lp.connect(out); out.connect(master);
+        if (send) { var s = actx.createGain(); s.gain.value = 0.55; out.connect(s); s.connect(send); }
+        // 完全5度（C4 + G4）。わずかなデチューンでやさしいうねり
+        var freqs = [261.63, 392.0];
+        var oscs = [];
+        for (var i = 0; i < freqs.length; i++) {
+          var o = actx.createOscillator();
+          o.type = "sine";
+          o.frequency.value = freqs[i] * (i ? 1.004 : 1.0);
+          o.connect(lp); o.start(t); oscs.push(o);
+        }
+        // ゆれは音量だけ（トレモロ）。ピッチは固定
+        var lfo = actx.createOscillator(); lfo.frequency.value = 3.0;
+        var lg = actx.createGain(); lg.gain.value = 0.015;
+        lfo.connect(lg); lg.connect(out.gain); lfo.start(t);
+        hold = { oscs: oscs, out: out, lfo: lfo };
       },
       holdEnd: function () {
         if (hold && actx) {
           var t = actx.currentTime;
-          hold.g.gain.cancelScheduledValues(t);
-          hold.g.gain.setValueAtTime(Math.max(hold.g.gain.value, 0.0001), t);
-          hold.g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
-          hold.o.stop(t + 0.3); hold.lfo.stop(t + 0.3);
+          hold.out.gain.cancelScheduledValues(t);
+          hold.out.gain.setValueAtTime(Math.max(hold.out.gain.value, 0.0001), t);
+          hold.out.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+          for (var i = 0; i < hold.oscs.length; i++) hold.oscs[i].stop(t + 0.35);
+          hold.lfo.stop(t + 0.35);
           hold = null;
         }
       },
