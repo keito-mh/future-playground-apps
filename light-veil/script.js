@@ -140,7 +140,8 @@ function addParticle(x, y, o = {}) {
   if (particles.length >= MAX_PARTICLES) return;
   particles.push({
     x, y,
-    vx: o.vx || 0, vy: o.vy || 0,
+    z: o.z || 0,        // 深度：+で手前(viewer)、-で奥
+    vx: o.vx || 0, vy: o.vy || 0, vz: o.vz || 0,
     drag: o.drag ?? 0.95,
     size: o.size || (5 + Math.random() * 7) * DPR,
     grow: o.grow ?? 1,
@@ -169,6 +170,8 @@ function update(dt) {
     }
     p.x += p.vx; p.y += p.vy;
     p.vx *= p.drag; p.vy *= p.drag;
+    // 深度：手前/奥へ飛び、だんだん減速
+    p.z += p.vz; p.vz *= 0.98;
     p.life -= p.decay;
     if (p.life <= 0) particles.splice(i, 1);
   }
@@ -179,13 +182,22 @@ function render() {
   ctx.drawImage(bg, 0, 0);
   // 手のフィードバック（指先のかすかな印）
   if (handOn) drawHandHints();
-  // 光の粒（加算）
+  // 光の粒（加算）。遠近投影：画面中心を消失点に、zで拡大・収束
   ctx.globalCompositeOperation = "lighter";
-  for (let i = 0; i < particles.length; i++) {
-    const p = particles[i];
-    const sz = p.size * (p.grow ? (0.5 + p.life * 0.9) : 1);
-    ctx.globalAlpha = Math.min(1, p.life * 1.3);
-    ctx.drawImage(getGlow(p.hue), p.x - sz, p.y - sz, sz * 2, sz * 2);
+  const VPx = W / 2, VPy = H / 2;
+  // 奥(z<0)→手前(z>=0)の順で描いて、手前を上に重ねる
+  for (let pass = 0; pass < 2; pass++) {
+    const wantNear = pass === 1;
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+      if ((p.z >= 0) !== wantNear) continue;
+      const ds = Math.max(0.18, Math.min(3.6, 1 + p.z)); // 遠近スケール
+      const sx = VPx + (p.x - VPx) * ds;
+      const sy = VPy + (p.y - VPy) * ds;
+      const sz = p.size * ds * (p.grow ? (0.5 + p.life * 0.9) : 1);
+      ctx.globalAlpha = Math.min(1, p.life * 1.3) * Math.max(0.22, Math.min(1.25, ds * 0.85));
+      ctx.drawImage(getGlow(p.hue), sx - sz, sy - sz, sz * 2, sz * 2);
+    }
   }
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "source-over";
@@ -271,8 +283,22 @@ function processHands(nowMs) {
     const isPinch = pinchD < 0.45;
     const isOpen = !isPinch && extCount >= 4;
     const isFist = !isPinch && extCount <= 1;
+    const isPoint = ext.index && !ext.middle && !ext.ring && !ext.pinky;
+    const isThumbs = ext.thumb && !ext.index && !ext.middle && !ext.ring && !ext.pinky;
 
-    // 指先トレイル（伸びている指から光が流れる）
+    // 手の近づき/遠ざかり（手のひらの大きさの変化）→ 奥行き方向の勢い
+    if (st.palmSmooth == null) st.palmSmooth = palmSize;
+    const rel = (palmSize - st.palmSmooth) / st.palmSmooth;
+    st.palmSmooth += (palmSize - st.palmSmooth) * 0.35;
+    const depthBias = Math.max(-0.16, Math.min(0.16, rel * 7));
+
+    // 手をぐっと近づける／引く → 手前・奥へ弾ける
+    if (rel > 0.10 && !st.pushing) { burst(palm.x, palm.y, 1.1, 1); Sound.push(); st.pushing = true; }
+    if (rel < 0.04) st.pushing = false;
+    if (rel < -0.10 && !st.pulling) { burst(palm.x, palm.y, 0.9, -1); Sound.pull(); st.pulling = true; }
+    if (rel > -0.04) st.pulling = false;
+
+    // 指先トレイル（伸びている指から光が流れる・奥行きの勢いを反映）
     const tips = [[4, ext.thumb], [8, ext.index], [12, ext.middle], [16, ext.ring], [20, ext.pinky]];
     for (const [ti, on] of tips) {
       if (!on) continue;
@@ -284,11 +310,21 @@ function processHands(nowMs) {
         addParticle(L[ti].x + (Math.random() - 0.5) * 8 * DPR, L[ti].y + (Math.random() - 0.5) * 8 * DPR, {
           vx: vx * 0.35 + (Math.random() - 0.5) * 0.6 * DPR,
           vy: vy * 0.35 + (Math.random() - 0.5) * 0.6 * DPR,
+          vz: depthBias * 0.4 + (Math.random() - 0.5) * 0.02,
           size: (4 + Math.random() * 5) * DPR, decay: 0.018
         });
       }
       if (sp > 5 && nowMs - st.lastEmit > 110) { Sound.chime(sp / 10); st.lastEmit = nowMs; }
     }
+
+    // 指さし（人差し指だけ）：集中した一筋の光
+    if (isPoint) {
+      let vx = 0, vy = 0;
+      if (st.prev) { vx = L[8].x - st.prev[8].x; vy = L[8].y - st.prev[8].y; }
+      pointStream(L[8], vx, vy);
+    }
+    // サムズアップ：金の星がパッと
+    if (isThumbs && !st.wasThumbs) { starBurst(L[4]); Sound.star(); }
 
     // つまむ：集める
     if (isPinch) {
@@ -304,7 +340,7 @@ function processHands(nowMs) {
     // 離した瞬間：弾ける
     if (!isPinch && st.wasPinch) {
       const pc = st.prev ? { x: (st.prev[4].x + st.prev[8].x) / 2, y: (st.prev[4].y + st.prev[8].y) / 2 } : palm;
-      burst(pc.x, pc.y, 1.0);
+      burst(pc.x, pc.y, 1.1, 1); // 手前へ弾ける
       Sound.burst();
     }
 
@@ -327,8 +363,10 @@ function processHands(nowMs) {
     liveHands.push({ palm, palmSize, tips: tips.filter(t => t[1]).map(t => L[t[0]]) });
 
     st.prev = L;
-    st.wasOpen = isOpen; st.wasPinch = isPinch; st.wasFist = isFist;
+    st.wasOpen = isOpen; st.wasPinch = isPinch; st.wasFist = isFist; st.wasThumbs = isThumbs;
   }
+  // 両手なら、手のひらの間に光の橋を架ける
+  if (liveHands.length >= 2) lightBridge(liveHands[0].palm, liveHands[1].palm);
   // 見えなくなった手の状態を掃除
   for (const k in handStates) if (!seen[k]) delete handStates[k];
 }
@@ -359,20 +397,67 @@ function drawHandHints() {
 // ===================================================================
 function bloomFrom(c, size) {
   const hue = themeHue();
-  const n = 26;
+  const n = 28;
   for (let i = 0; i < n; i++) {
     const a = (i / n) * TAU + Math.random() * 0.3;
     const sp = (2 + Math.random() * 4) * DPR;
-    addParticle(c.x, c.y, { vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, size: (5 + Math.random() * 7) * DPR, hue: hue + (Math.random() - 0.5) * 20, decay: 0.012 });
+    // 立体的に：手前と奥へ散らす
+    const vz = (Math.random() - 0.5) * 0.16;
+    addParticle(c.x, c.y, {
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz,
+      size: (5 + Math.random() * 7) * DPR, hue: hue + (Math.random() - 0.5) * 20,
+      decay: vz > 0 ? 0.009 : 0.014 // 手前に来る光は残留を長く
+    });
   }
   addParticle(c.x, c.y, { size: (size || 60) * 1.1, grow: 0, decay: 0.03, hue });
 }
-function burst(x, y, power) {
+// dir: +1=手前へ飛ぶ / -1=奥へ飛ぶ / 0=平面
+function burst(x, y, power, dir = 0) {
   const hue = themeHue();
   const n = Math.floor(22 * power);
   for (let i = 0; i < n; i++) {
     const a = Math.random() * TAU, sp = (1.5 + Math.random() * 5) * power * DPR;
-    addParticle(x, y, { vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, size: (5 + Math.random() * 6) * DPR, hue: hue + (Math.random() - 0.5) * 24, decay: 0.012 });
+    const vz = dir * (0.05 + Math.random() * 0.14) + (Math.random() - 0.5) * 0.04;
+    addParticle(x, y, {
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz,
+      z: dir * 0.05,
+      size: (5 + Math.random() * 6) * DPR, hue: hue + (Math.random() - 0.5) * 24,
+      decay: dir > 0 ? 0.009 : (dir < 0 ? 0.02 : 0.012) // 手前は残留長め・奥は短め
+    });
+  }
+}
+// 指さし（人差し指）：集中した一筋の光（少し手前へ）
+function pointStream(tip, vx, vy) {
+  for (let k = 0; k < 2; k++) {
+    addParticle(tip.x + (Math.random() - 0.5) * 4 * DPR, tip.y + (Math.random() - 0.5) * 4 * DPR, {
+      vx: vx * 0.4 + (Math.random() - 0.5) * 0.4 * DPR,
+      vy: vy * 0.4 + (Math.random() - 0.5) * 0.4 * DPR,
+      vz: 0.02 + Math.random() * 0.02,
+      size: (5 + Math.random() * 5) * DPR, decay: 0.014
+    });
+  }
+}
+// サムズアップ：金色寄りの星がパッと舞う
+function starBurst(c) {
+  for (let i = 0; i < 16; i++) {
+    const a = Math.random() * TAU, sp = (2 + Math.random() * 4) * DPR;
+    addParticle(c.x, c.y, {
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1 * DPR, vz: (Math.random() - 0.3) * 0.1,
+      size: (4 + Math.random() * 6) * DPR, hue: 40 + Math.random() * 16, decay: 0.012
+    });
+  }
+}
+// 両手の間に光の橋を架ける
+function lightBridge(a, b) {
+  const d = Math.hypot(b.x - a.x, b.y - a.y);
+  const n = Math.min(10, Math.floor(d / (28 * DPR)) + 1);
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+    if (Math.random() < 0.5)
+      addParticle(x + (Math.random() - 0.5) * 10 * DPR, y + (Math.random() - 0.5) * 10 * DPR, {
+        size: (4 + Math.random() * 5) * DPR, decay: 0.03, swirl: 0.2
+      });
   }
 }
 function calm() {
@@ -528,6 +613,7 @@ document.getElementById("source").addEventListener("click", (e) => {
 document.getElementById("modes").addEventListener("click", (e) => {
   const b = e.target.closest(".mode"); if (!b) return;
   theme = b.getAttribute("data-mode"); setActive("modes", theme);
+  Sound.setTheme(theme);
   toast({ green: "みどり", aurora: "オーロラ", gold: "ゴールド" }[theme]);
 });
 
@@ -589,7 +675,13 @@ function toast(msg) {
 // ===================================================================
 const Sound = (() => {
   let actx = null, master = null, send = null, on = true, lastChime = 0;
-  const SCALE = [523.25, 587.33, 698.46, 783.99, 880.0, 1046.5];
+  // 色テーマごとに音階・音色・残響を変える
+  const PAL = {
+    green: { scale: [523.25, 587.33, 698.46, 783.99, 880.0, 1046.5], type: "triangle", wet: 0.55, chord: [523.25, 659.25, 783.99], root: 523.25 },
+    aurora: { scale: [587.33, 659.25, 739.99, 880.0, 987.77, 1174.66], type: "sine", wet: 0.9, chord: [587.33, 739.99, 880.0, 1108.73], root: 587.33 },
+    gold: { scale: [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5], type: "triangle", wet: 0.4, chord: [523.25, 659.25, 783.99, 1046.5], root: 392.0 }
+  };
+  let pal = PAL.green;
   function impulse(dur, decay) {
     const rate = actx.sampleRate, len = Math.floor(rate * dur);
     const buf = actx.createBuffer(2, len, rate);
@@ -608,7 +700,7 @@ const Sound = (() => {
   function resume() { if (actx && actx.state === "suspended") actx.resume(); }
   function note(freq, o = {}) {
     if (!actx || !on) return;
-    const t = actx.currentTime, dur = o.dur || 0.5, g = actx.createGain();
+    const t = actx.currentTime + (o.when || 0), dur = o.dur || 0.5, g = actx.createGain();
     const peak = o.gain ?? 0.12;
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(peak, t + (o.attack || 0.012));
@@ -622,6 +714,7 @@ const Sound = (() => {
   }
   return {
     kick() { init(); resume(); },
+    setTheme(t) { pal = PAL[t] || PAL.green; },
     toggle() {
       on = !on;
       if (actx) { const t = actx.currentTime; master.gain.cancelScheduledValues(t); master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), t); master.gain.exponentialRampToValueAtTime(on ? 0.8 : 0.0001, t + 0.25); }
@@ -630,13 +723,19 @@ const Sound = (() => {
     chime(speed) {
       if (!actx || !on) return;
       const now = performance.now(); if (now - lastChime < 80) return; lastChime = now;
-      const f = SCALE[(Math.random() * SCALE.length) | 0] * (Math.random() < 0.5 ? 1 : 2);
-      note(f, { type: "triangle", dur: 0.5, gain: 0.045 + Math.min(speed, 2) * 0.02, attack: 0.005, wet: 0.7 });
+      const f = pal.scale[(Math.random() * pal.scale.length) | 0] * (Math.random() < 0.5 ? 1 : 2);
+      note(f, { type: pal.type, dur: 0.5, gain: 0.045 + Math.min(speed, 2) * 0.02, attack: 0.005, wet: pal.wet });
     },
-    burst() { note(880, { type: "sine", dur: 0.45, gain: 0.16, glide: 0.45, attack: 0.004, wet: 0.8 }); note(1320, { type: "sine", dur: 0.18, gain: 0.06, glide: 0.5, attack: 0.003, wet: 0.5 }); },
-    bloom() { note(523.25, { dur: 1.1, gain: 0.12, attack: 0.03, wet: 0.9 }); note(659.25, { dur: 1.1, gain: 0.09, attack: 0.05, wet: 0.9 }); note(783.99, { dur: 1.2, gain: 0.07, attack: 0.07, wet: 0.9 }); },
-    gather() { note(392, { dur: 0.6, gain: 0.08, glide: 1.5, attack: 0.04, wet: 0.8 }); },
-    calm() { note(196, { dur: 0.9, gain: 0.09, attack: 0.06, wet: 0.8 }); note(261.63, { dur: 0.9, gain: 0.05, attack: 0.08, wet: 0.8 }); }
+    burst() {
+      note(pal.scale[pal.scale.length - 1], { type: "sine", dur: 0.45, gain: 0.16, glide: 0.45, attack: 0.004, wet: Math.min(1, pal.wet + 0.1) });
+      note(pal.scale[3] * 2, { type: "sine", dur: 0.18, gain: 0.06, glide: 0.5, attack: 0.003, wet: 0.5 });
+    },
+    bloom() { pal.chord.forEach((f, i) => note(f, { type: pal.type === "triangle" ? "sine" : pal.type, dur: 1.1 + i * 0.05, gain: 0.12 - i * 0.02, attack: 0.03 + i * 0.02, wet: Math.min(1, pal.wet + 0.2), when: i * 0.02 })); },
+    gather() { note(pal.root, { dur: 0.6, gain: 0.08, glide: 1.6, attack: 0.04, wet: pal.wet }); },
+    calm() { note(pal.root / 2, { dur: 0.9, gain: 0.09, attack: 0.06, wet: pal.wet }); note(pal.root, { dur: 0.9, gain: 0.05, attack: 0.08, wet: pal.wet }); },
+    push() { note(pal.root, { type: pal.type, dur: 0.5, gain: 0.14, glide: 1.9, attack: 0.02, wet: pal.wet }); },   // 近づく＝上昇
+    pull() { note(pal.root * 2, { type: "sine", dur: 0.6, gain: 0.10, glide: 0.4, attack: 0.02, wet: Math.min(1, pal.wet + 0.1) }); }, // 遠ざかる＝下降
+    star() { for (let i = 0; i < 3; i++) note(pal.scale[i + 1] * 2, { type: "triangle", dur: 0.4, gain: 0.08, attack: 0.004, wet: pal.wet, when: i * 0.07 }); }
   };
 })();
 
