@@ -240,6 +240,11 @@ body {
   transform: scale(0.92);
   background: rgba(70, 230, 180, 0.25);
 }
+.iconBtn.on {
+  color: #042018;
+  border-color: transparent;
+  background: linear-gradient(120deg, rgba(120, 255, 200, 0.9), rgba(90, 220, 230, 0.9));
+}
 
 /* ---- 画面下部ドック ---- */
 #dock {

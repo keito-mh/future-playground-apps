@@ -59,6 +59,15 @@
   var pointers = {};
   var dragging = false;
 
+  // ---- 動き検出（カメラの動いた所に光が集まる・軽量） ----
+  var motionOn = true;
+  var motionCanvas = document.createElement("canvas");
+  var mctx = motionCanvas.getContext("2d", { willReadFrequently: true });
+  var MW = 64, MH = 0;
+  var prevLuma = null;
+  var motionFrame = 0;
+  var MOTION_TH = 20; // この明るさ変化以上を「動き」とみなす
+
   // ===================================================================
   // 音（Web Audio で合成。素材ファイルなし＝軽い。やさしい音色）
   //  - なぞる：風鈴のような小さな粒の音（ペンタトニックでいつでも調和）
@@ -261,6 +270,9 @@
     bg.width = W; bg.height = H;
     layer.width = W; layer.height = H;
     DIST_MAX = Math.max(W, H) * 0.5; // これ以上大きい歪みはフチの光だけにして軽さを守る
+    MH = Math.max(16, Math.round(MW * H / W));
+    motionCanvas.width = MW; motionCanvas.height = MH;
+    prevLuma = null;
   }
   window.addEventListener("resize", resize);
   window.addEventListener("orientationchange", function () { setTimeout(resize, 250); });
@@ -508,6 +520,50 @@
     }
   }
 
+  // 動き検出：背景を小さく縮小し、前フレームとの明るさ差から動きを拾う
+  function processMotion() {
+    if (!motionOn || sourceMode !== "camera" || !camReady || !video.videoWidth) return;
+    motionFrame++;
+    if (motionFrame % 2) return; // 隔フレームで十分（軽く）
+    mctx.drawImage(bg, 0, 0, W, H, 0, 0, MW, MH);
+    var d = mctx.getImageData(0, 0, MW, MH).data;
+    var n = MW * MH;
+    var i;
+    if (!prevLuma || prevLuma.length !== n) {
+      prevLuma = new Float32Array(n);
+      for (i = 0; i < n; i++) prevLuma[i] = d[i * 4] * 0.3 + d[i * 4 + 1] * 0.59 + d[i * 4 + 2] * 0.11;
+      return;
+    }
+    var sumX = 0, sumY = 0, sumW = 0, spawns = 0;
+    var MAXS = 5;
+    for (var j = 0; j < MH; j++) {
+      for (var ix = 0; ix < MW; ix++) {
+        var idx = j * MW + ix;
+        var l = d[idx * 4] * 0.3 + d[idx * 4 + 1] * 0.59 + d[idx * 4 + 2] * 0.11;
+        var diff = Math.abs(l - prevLuma[idx]);
+        prevLuma[idx] = l;
+        if (diff > MOTION_TH) {
+          sumX += ix * diff; sumY += j * diff; sumW += diff;
+          // 動いた所にときどき光をともす（数は厳しく制限）
+          if (spawns < MAXS && Math.random() < 0.06) {
+            var sx = (ix + 0.5) / MW * W, sy = (j + 0.5) / MH * H;
+            addSpark(sx, sy, {
+              size: (4 + Math.min(diff / 28, 3) * 3) * DPR,
+              vx: (Math.random() - 0.5) * 0.6 * DPR,
+              vy: (Math.random() - 0.5) * 0.6 * DPR,
+              decay: 0.05
+            });
+            spawns++;
+          }
+        }
+      }
+    }
+    // 動きの重心にやわらかな膜（人がいる辺りに光が寄る感じ）
+    if (sumW > MOTION_TH * 50 && Math.random() < 0.5) {
+      addSpark(sumX / sumW / MW * W, sumY / sumW / MH * H, { size: 16 * DPR, decay: 0.06 });
+    }
+  }
+
   function render() {
     // 背景
     ctx.globalCompositeOperation = "source-over";
@@ -536,6 +592,7 @@
     var active = liveCamera || dragging || warps.length > 0 || sparks.length > 0;
     if (active) {
       paintBackground();
+      processMotion();
       update();
       render();
     }
@@ -604,6 +661,7 @@
       .then(function (stream) { camStream = stream; video.srcObject = stream; return video.play(); })
       .then(function () {
         camReady = true; sourceMode = "camera"; setActive("source", "camera"); hideGate();
+        prevLuma = null;
         toast("カメラの景色をゆらせます");
       })
       .catch(function (err) {
@@ -657,6 +715,16 @@
     soundBtn.classList.toggle("muted", !on);
     soundBtn.setAttribute("aria-pressed", on ? "true" : "false");
     toast(on ? "音オン" : "音オフ");
+  });
+
+  // 動きに反応のオン/オフ
+  var motionBtn = document.getElementById("motion");
+  motionBtn.addEventListener("click", function () {
+    motionOn = !motionOn;
+    prevLuma = null;
+    motionBtn.classList.toggle("on", motionOn);
+    motionBtn.setAttribute("aria-pressed", motionOn ? "true" : "false");
+    toast(motionOn ? "動きに反応 オン" : "動きに反応 オフ");
   });
 
   // ===================================================================
