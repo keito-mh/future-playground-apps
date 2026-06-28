@@ -902,31 +902,45 @@ document.getElementById("reset").addEventListener("click", () => {
   clearArt();
   toast(drawMode ? "絵を消しました" : "消しました");
 });
+function fileName() { return "hikari-nazori-" + Date.now() + ".png"; }
+function dataURLtoFile(durl, name) {
+  const [head, b64] = durl.split(",");
+  const mime = (head.match(/:(.*?);/) || [, "image/png"])[1];
+  const bin = atob(b64), len = bin.length, arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
+  return new File([arr], name, { type: mime });
+}
+function downloadDataURL(durl, okMsg) {
+  const a = document.createElement("a");
+  a.href = durl; a.download = fileName();
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  toast(okMsg);
+}
 function downloadCanvas(okMsg) {
-  try {
-    stage.toBlob((blob) => {
-      if (!blob) { toast("スクショで保存してね"); return; }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = "hikari-nazori-" + Date.now() + ".png";
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-      toast(okMsg);
-    }, "image/png");
-  } catch (err) { toast("スクショで保存してね"); }
+  try { downloadDataURL(stage.toDataURL("image/png"), okMsg); }
+  catch (err) { toast("スクショで保存してね"); }
 }
 document.getElementById("save").addEventListener("click", () => downloadCanvas("画像を保存しました"));
 
-// カメラシャッター：フラッシュ＋シャッター音＋撮影（今の合成画像を保存）
+// カメラシャッター：撮影 → 共有シートから「写真に保存」（カメラロールへ）
 const flashEl = document.getElementById("flash");
 document.getElementById("shutter").addEventListener("click", () => {
   Sound.kick();
-  // 先に今フレームを撮ってから演出（フラッシュは画像に写り込まない）
-  downloadCanvas("撮影しました");
+  // 先に今フレームを取得（フラッシュは写り込ませない）
+  let durl;
+  try { durl = stage.toDataURL("image/png"); } catch (err) { toast("スクショで保存してね"); return; }
+  // 演出
   Sound.shutter();
-  flashEl.classList.remove("fire");
-  void flashEl.offsetWidth; // リフローでアニメ再起動
-  flashEl.classList.add("fire");
+  flashEl.classList.remove("fire"); void flashEl.offsetWidth; flashEl.classList.add("fire");
+  // 写真フォルダへ：共有シート（対応端末）→ 写真に保存。非対応はダウンロード
+  const file = dataURLtoFile(durl, fileName());
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    navigator.share({ files: [file], title: "ひかりなぞり" })
+      .then(() => toast("「写真に保存」を選んでね"))
+      .catch((err) => { if (!err || err.name !== "AbortError") downloadDataURL(durl, "画像を保存しました"); });
+  } else {
+    downloadDataURL(durl, "画像を保存しました");
+  }
 });
 
 // ===================================================================
