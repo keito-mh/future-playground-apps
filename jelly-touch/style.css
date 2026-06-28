@@ -195,6 +195,11 @@ body {
   background: linear-gradient(120deg, #6cc8ff, #8affd0);
   box-shadow: 0 6px 18px rgba(110, 190, 230, 0.5);
 }
+#music.on {
+  color: #fff;
+  background: linear-gradient(120deg, #b39cff, #ff9ed6);
+  box-shadow: 0 6px 18px rgba(180, 150, 230, 0.5);
+}
 #finish:not([hidden]) {
   animation: pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
 }

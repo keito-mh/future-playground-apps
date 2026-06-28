@@ -15,6 +15,7 @@
   const soundBtn = document.getElementById("sound");
   const resetBtn = document.getElementById("reset");
   const jiggleBtn = document.getElementById("jiggle");
+  const musicBtn = document.getElementById("music");
   const finishBtn = document.getElementById("finish");
   const resultEl = document.getElementById("result");
   const resultName = document.querySelector(".resultName");
@@ -47,6 +48,7 @@
   let cx = 0, cy = 0;     // 中央
   let R = 120;            // 基本半径
   let baseY = 0;          // 設置面（影の位置）
+  let extent = R;         // いちばん外側までの距離（伸び対応の描画用）
 
   // 全体オフセット（ドラッグでぬるっと付いてくる）
   let ox = 0, oy = 0, ovx = 0, ovy = 0;
@@ -110,6 +112,8 @@
   let finished = false;    // 完成済みか
   let finishReady = false; // 完成ボタン表示済みか
   let lastTapTime = 0;
+  let trembleAmp = 0;      // シェイク中の細かい震え（止めると余韻を残して減衰）
+  let beatFlash = 0;       // 音楽の拍に合わせた発光（毎拍たかまり減衰）
 
   // ====================================================================
   //  揺らす系のインパルス
@@ -138,6 +142,8 @@
     }
     ovx += (Math.random() - 0.5) * 60 * power;
     ovy += (Math.random() - 0.5) * 60 * power;
+    // 震えをためる（シェイクを続けると持続、止めると余韻でゆっくり収まる）
+    trembleAmp = Math.min(11, trembleAmp + 5 * power);
   }
 
   // 全体がふくらんで弾む（長押し離し）
@@ -558,27 +564,30 @@
     // いま目指す形（rest）を毎フレーム作り直す。ばねはこの形へ向かう。
     rest.fill(0);
 
-    // ドラッグ中：指に吸い付いて、引っ張るほどぐにーっと伸びる（頭打ちなし）
+    // ドラッグ中：本体は指へほどよく追従し、指の方へ「細い舌」が伸びる。
+    // 引っ張った所がふくらむのではなく、くびれて本体の体積は中心に残る。
     if (active && mode === "drag") {
       const fx = curX - cx;   // 指（静止中心からの位置）
       const fy = curY - cy;
-      // 本体は指へ大きく追従。spring の遅れがそのまま弾力になる
-      const bodyFollow = 0.55;
+      // 本体は控えめに付いていく（spring の遅れが弾力に）。出すぎないよう低め。
+      const bodyFollow = 0.4;
       ovx += (fx * bodyFollow - ox) * 55 * dt;
       ovy += (fy * bodyFollow - oy) * 55 * dt;
-      // 先端は「本体中心→指」のすき間ぶん伸びる＝指へ届こうとする
+      // 本体のふち〜指までのすき間を「舌」が橋渡しする（伸びすぎない量）
       const lagx = curX - (cx + ox);
       const lagy = curY - (cy + oy);
       const lag = Math.hypot(lagx, lagy);
       const stretchAng = Math.atan2(lagy, lagx);
-      const stretchAmt = Math.min(lag * 1.15, R * 2.0); // 引っ張るほど伸びる
+      const stretchAmt = Math.max(0, Math.min(lag - R * 0.85, R * 0.8));
       for (let i = 0; i < N; i++) {
         let dA = ang[i] - stretchAng;
         while (dA > Math.PI) dA -= Math.PI * 2;
         while (dA < -Math.PI) dA += Math.PI * 2;
-        const c = Math.cos(dA);
-        const wf = c > 0 ? c * c * c : -0.18 * c * c; // 近い側だけ大きく伸び、反対側は軽く締まる
-        rest[i] = wf * stretchAmt;
+        const ad = Math.abs(dA);
+        const tip = Math.exp(-(dA * dA) / (2 * 0.34 * 0.34));        // 指へ細く伸びる舌
+        const neck = Math.exp(-((ad - 0.62) * (ad - 0.62)) / (2 * 0.34 * 0.34)); // 舌の根元をくびれさせる
+        const waist = Math.exp(-((ad - 1.5708) * (ad - 1.5708)) / (2 * 0.55 * 0.55)); // 横をしぼり体積を中心に保つ
+        rest[i] = tip * stretchAmt - neck * stretchAmt * 0.42 - waist * stretchAmt * 0.26;
       }
     }
     // タップ（押している間）：接点をぐっと押し込み続ける → 離すと跳ね返る
@@ -602,6 +611,16 @@
       oy += (Math.min(R * 0.18, 22) - oy) * 6 * dt;
     }
 
+    // シェイクの細かい震え（持続中はぷるぷる、止めると余韻を残して減衰）
+    if (trembleAmp > 0.04) {
+      for (let i = 0; i < N; i++) v[i] += (Math.random() - 0.5) * trembleAmp;
+      ovx += (Math.random() - 0.5) * trembleAmp * 1.4;
+      ovy += (Math.random() - 0.5) * trembleAmp * 1.4;
+      trembleAmp *= Math.exp(-1.9 * dt);
+    } else {
+      trembleAmp = 0;
+    }
+
     // リングばね（rest の形へ向かう。離すと rest=0 に戻りぷるん）
     for (let i = 0; i < N; i++) {
       const left = r[(i - 1 + N) % N];
@@ -612,6 +631,11 @@
       v[i] *= Math.exp(-damp * dt);
       r[i] += v[i] * dt;
     }
+
+    // いちばん外側までの距離（伸びた分の描画グラデを滑らかにするため）
+    let mx = 0;
+    for (let i = 0; i < N; i++) if (r[i] > mx) mx = r[i];
+    extent = R + mx;
 
     // 全体オフセットのばね戻り（ぷるん）
     if (!(active && mode === "drag")) {
@@ -727,9 +751,9 @@
     const pts = traceBlob(1);
     ctx.save();
 
-    // グロー
-    ctx.shadowColor = `hsla(${wrapHue(h)},90%,80%,${0.25 + personality.glow * 0.5})`;
-    ctx.shadowBlur = 24 + personality.glow * 36;
+    // グロー（音楽の拍でふわっと強まる）
+    ctx.shadowColor = `hsla(${wrapHue(h)},90%,80%,${0.25 + personality.glow * 0.5 + beatFlash * 0.25})`;
+    ctx.shadowBlur = 24 + personality.glow * 36 + beatFlash * 22;
 
     // 塗り：にじいろ なら円錐風グラデを近似（複数色の放射）
     let fill;
@@ -742,14 +766,16 @@
         fill.addColorStop(s / 5, `hsla(${hh},${sat}%,${light}%,${alpha})`);
       }
     } else {
+      const fr = Math.max(R * 1.35, extent * 1.1); // 伸びた先までグラデを届かせて段差を防ぐ
       fill = ctx.createRadialGradient(
-        cx + ox - R * 0.3, cy + oy - R * 0.4, R * 0.2,
-        cx + ox, cy + oy, R * 1.25
+        cx + ox - R * 0.32, cy + oy - R * 0.42, R * 0.15,
+        cx + ox + R * 0.1, cy + oy + R * 0.15, fr
       );
       const milkBoost = personality.milky * 12;
-      fill.addColorStop(0, `hsla(${wrapHue(h + 10)},${sat - personality.milky * 18}%,${Math.min(96, light + 14 + milkBoost)}%,${alpha})`);
-      fill.addColorStop(0.6, `hsla(${h},${sat}%,${light}%,${alpha})`);
-      fill.addColorStop(1, `hsla(${wrapHue(h - 15)},${sat}%,${light - 8}%,${Math.min(1, alpha + 0.12)})`);
+      fill.addColorStop(0, `hsla(${wrapHue(h + 12)},${sat - personality.milky * 18}%,${Math.min(97, light + 20 + milkBoost)}%,${alpha})`);
+      fill.addColorStop(0.45, `hsla(${h},${sat}%,${light + 4}%,${alpha})`);
+      fill.addColorStop(0.8, `hsla(${wrapHue(h - 8)},${sat + 4}%,${light - 8}%,${Math.min(1, alpha + 0.06)})`);
+      fill.addColorStop(1, `hsla(${wrapHue(h - 14)},${sat + 6}%,${light - 13}%,${Math.min(1, alpha + 0.12)})`);
     }
     ctx.fillStyle = fill;
     ctx.fill();
@@ -768,6 +794,27 @@
       ctx.fillStyle = mg;
       ctx.fillRect(cx + ox - R, cy + oy - R, R * 2, R * 2);
     }
+
+    // 立体感：上は明るく、底の内側はうっすら影
+    const ish = ctx.createRadialGradient(
+      cx + ox, cy + oy - R * 0.5, R * 0.2,
+      cx + ox, cy + oy + R * 0.35, R * 1.3
+    );
+    ish.addColorStop(0, "hsla(0,0%,100%,0)");
+    ish.addColorStop(0.7, "hsla(0,0%,100%,0)");
+    ish.addColorStop(1, `hsla(${wrapHue(h - 20)},${sat + 8}%,${Math.max(32, light - 32)}%,0.5)`);
+    ctx.fillStyle = ish;
+    ctx.fillRect(cx + ox - R * 1.2, cy + oy - R * 1.2, R * 2.4, R * 2.4);
+
+    // 透過：底の内側に光が抜ける明るいにじみ（ゼリーらしさ）
+    const cg = ctx.createRadialGradient(
+      cx + ox, cy + oy + R * 0.62, 0,
+      cx + ox, cy + oy + R * 0.62, R * 0.85
+    );
+    cg.addColorStop(0, `hsla(${wrapHue(h + 18)},100%,93%,${0.45 + personality.glow * 0.2})`);
+    cg.addColorStop(1, "hsla(0,0%,100%,0)");
+    ctx.fillStyle = cg;
+    ctx.fillRect(cx + ox - R, cy + oy - R, R * 2, R * 2);
 
     drawBubbles(dt);
     drawSparks(dt);
@@ -793,10 +840,10 @@
     ctx.fill();
     ctx.restore();
 
-    // ふち光り（きらきら / にじいろで強まる）
+    // ふち光り（きらきら / にじいろ / 音楽の拍で強まる）
     traceBlob(1);
-    ctx.strokeStyle = `hsla(${wrapHue(h + 20)},90%,92%,${0.4 + personality.glow * 0.5})`;
-    ctx.lineWidth = 1.5 + personality.glow * 2;
+    ctx.strokeStyle = `hsla(${wrapHue(h + 20)},90%,92%,${0.4 + personality.glow * 0.5 + beatFlash * 0.25})`;
+    ctx.lineWidth = 1.5 + personality.glow * 2 + beatFlash * 1.5;
     ctx.stroke();
   }
 
@@ -873,6 +920,8 @@
     if (dt > 0.034) dt = 0.034;   // タブ復帰などで飛ばない＆ばねの安定化
 
     easePersonality();
+    if (musicOn) musicScheduler();
+    beatFlash *= Math.exp(-4 * dt);
     if (finishPhase > 0 && finishPhase < 3) runFinish(now);
     physics(dt);
 
@@ -937,6 +986,79 @@
       try { navigator.vibrate(pattern); } catch (_) {}
     }
   }
+
+  // ====================================================================
+  //  おんがく（任意・初期OFF）：やさしいループに合わせてゼリーが脈動する
+  // ====================================================================
+  let musicOn = false;
+  let musicNext = 0;        // 次の音の時刻（AudioContext時間）
+  let musicStep = 0;
+  const beatQ = [];         // 拍の視覚演出キュー
+  const STEP = 0.3;         // 1ステップ＝約100BPMの8分音符
+  const ROOT = 264;         // C4 あたり
+  const MEL = [0, 7, 12, 7, 9, 7, 4, 0, 2, 4, 7, 4, 5, 4, 2, 0];   // ペンタ風のやさしい旋律
+  const BASS = [0, 0, 5, 5, 9, 9, 5, 5, 2, 2, 7, 7, 5, 5, 7, 7];
+  function semiHz(s) { return ROOT * Math.pow(2, s / 12); }
+  function playTone(freq, t, vol, dur, type) {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 1700;
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(lp).connect(g).connect(audioCtx.destination);
+    o.start(t);
+    o.stop(t + dur + 0.05);
+  }
+  function musicScheduler() {
+    if (!musicOn || !audioCtx) return;
+    const now = audioCtx.currentTime;
+    // 少し先まで音を予約
+    while (musicNext < now + 0.12) {
+      if (musicNext < now) musicNext = now;
+      const s = musicStep % MEL.length;
+      const strong = s % 4 === 0;
+      playTone(semiHz(MEL[s] + 12), musicNext, strong ? 0.05 : 0.038, 0.5, "triangle");
+      if (strong) playTone(semiHz(BASS[s] - 12), musicNext, 0.06, 0.45, "sine");
+      beatQ.push({ t: musicNext, strong });
+      musicNext += STEP;
+      musicStep++;
+    }
+    // 時刻が来た拍でゼリーをぷるんと脈動
+    for (let i = beatQ.length - 1; i >= 0; i--) {
+      if (now >= beatQ[i].t) {
+        const strong = beatQ[i].strong;
+        if (!finished) {
+          for (let k = 0; k < N; k++) v[k] += strong ? 4.2 : 2.0;
+          squashV -= strong ? 0.15 : 0.06;
+        }
+        beatFlash = Math.max(beatFlash, strong ? 1 : 0.5);
+        if (strong && sparks.length < 60 && !finished) addSpark();
+        beatQ.splice(i, 1);
+      }
+    }
+  }
+  musicBtn.addEventListener("click", () => {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
+    }
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+    musicOn = !musicOn;
+    musicBtn.classList.toggle("on", musicOn);
+    musicBtn.setAttribute("aria-pressed", musicOn ? "true" : "false");
+    if (musicOn && audioCtx) {
+      musicNext = audioCtx.currentTime + 0.1;
+      musicStep = 0;
+      hideIntro();
+    } else {
+      beatQ.length = 0;
+    }
+  });
 
   // ====================================================================
   //  起動
