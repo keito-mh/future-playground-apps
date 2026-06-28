@@ -59,8 +59,8 @@
 
   function layout() {
     cx = W / 2;
-    R = Math.max(78, Math.min(W, H) * 0.27);
-    cy = H * 0.46;
+    R = Math.max(86, Math.min(W, H) * 0.3);
+    cy = H * 0.44;
     baseY = cy + R * 1.02;
   }
 
@@ -310,12 +310,12 @@
       // 連続タップ：きらきら粒（星）が増える
       target.glow = Math.min(1, target.glow + 0.05);
       target.star = Math.min(1, target.star + 0.06);
-      if (sparks.length < 46) { addSpark(); addSpark(); }
+      if (sparks.length < 30) addSpark();
     }
     lastTapTime = now;
     // タップ：明るいソーダ系へ、泡が増える
     target.hue = wrapHue(target.hue + (185 - target.hue) * 0.04 + 3);
-    target.accent = wrapHue(target.hue + 34);   // ソーダのハイライト色
+    target.accent = wrapHue(target.hue + 22);   // ソーダのハイライト色（控えめな二色）
     target.light = Math.min(80, target.light + 0.6);
     target.milky = Math.max(0, target.milky - 0.02);
     if (bubbles.length < 30 && Math.random() < 0.8) addBubble();
@@ -351,8 +351,8 @@
     stats.shake++;
     // シェイク：色が混ざり、虹色寄りに（二色グラデが大きく開く）
     target.rainbow = Math.min(1, target.rainbow + 0.06);
-    target.hue = wrapHue(target.hue + 14);
-    target.accent = wrapHue(target.hue + 110);
+    target.hue = wrapHue(target.hue + 12);
+    target.accent = wrapHue(target.hue + 64);
     target.glow = Math.min(1, target.glow + 0.02);
     growTraits();
     bumpGrowth(0.045);
@@ -360,7 +360,7 @@
 
   // 触るほど「自分だけの形」が育つ（輪郭のくせを少しずつ強める）
   function growTraits() {
-    target.lobe = Math.min(0.85, totalTouches() / 26);
+    target.lobe = Math.min(0.55, totalTouches() / 36);
     updateTraits();
   }
 
@@ -610,8 +610,8 @@
     personality.hue = wrapHue(personality.hue + shortHue(target.hue - personality.hue) * k);
     personality.accent = wrapHue(personality.accent + shortHue(target.accent - personality.accent) * k);
 
-    // きみだけの輪郭をゆっくり育てる
-    const amp = personality.lobe * R * 0.1;
+    // きみだけの輪郭をゆっくり育てる（ドーム型を崩さないごく控えめなうねり）
+    const amp = personality.lobe * R * 0.035;
     for (let i = 0; i < N; i++) {
       shapeTgt[i] = amp * (0.62 * Math.sin(ang[i] * lobeA + phA) + 0.38 * Math.sin(ang[i] * lobeB + phB));
       shapeOff[i] += (shapeTgt[i] - shapeOff[i]) * 0.04;
@@ -627,7 +627,7 @@
   //  物理ステップ
   // ====================================================================
   function physics(dt) {
-    const stiff = 340 * personality.wob;   // ばね定数（高いほど速い「プルルルン」）
+    const stiff = 300 * personality.wob;   // ばね定数（高いほど速い「プルルルン」）
     const damp = 3.7;                       // 減衰（小さいほど余韻が長い）
     const spread = 0.34;                    // 隣どうしの伝播（波）
 
@@ -765,15 +765,16 @@
   function drawBackground() {
     const g = ctx.createLinearGradient(0, 0, 0, H);
     const h = personality.hue;
-    g.addColorStop(0, `hsl(${wrapHue(h + 20)},70%,96%)`);
-    g.addColorStop(0.5, `hsl(${wrapHue(h)},65%,93%)`);
-    g.addColorStop(1, `hsl(${wrapHue(h - 25)},60%,89%)`);
+    // 背景は淡く控えめに（ゼリーの色が映えるよう、彩度は低め・色味は薄く乗せる程度）
+    g.addColorStop(0, `hsl(${wrapHue(h + 30)},38%,97%)`);
+    g.addColorStop(0.55, `hsl(${wrapHue(h)},30%,95%)`);
+    g.addColorStop(1, `hsl(${wrapHue(h - 30)},34%,93%)`);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
     // 淡いふわっとした光
-    const rg = ctx.createRadialGradient(cx, cy * 0.8, 0, cx, cy * 0.8, Math.max(W, H) * 0.7);
-    rg.addColorStop(0, `hsla(${wrapHue(h + 30)},80%,98%,0.6)`);
+    const rg = ctx.createRadialGradient(cx, cy * 0.82, 0, cx, cy * 0.82, Math.max(W, H) * 0.7);
+    rg.addColorStop(0, "hsla(0,0%,100%,0.55)");
     rg.addColorStop(1, "hsla(0,0%,100%,0)");
     ctx.fillStyle = rg;
     ctx.fillRect(0, 0, W, H);
@@ -844,10 +845,12 @@
         cx + ox, cy + oy, fr
       );
       const milkBoost = personality.milky * 12;
-      // 上は基本色、ふち〜舌はアクセント色（二色グラデ＝きみだけの配色）
-      fill.addColorStop(0, `hsla(${wrapHue(h + 12)},${sat - personality.milky * 18}%,${Math.min(97, light + 18 + milkBoost)}%,${alpha})`);
-      fill.addColorStop(0.5, `hsla(${h},${sat}%,${light + 3}%,${alpha})`);
-      fill.addColorStop(1, `hsla(${wrapHue(ah)},${sat + 3}%,${light - 6}%,${Math.min(1, alpha + 0.07)})`);
+      const edgeA = Math.min(0.86, alpha + 0.26);  // ふちはしっかり色を出して輪郭の浮きを防ぐ
+      const midA = Math.min(0.8, alpha + 0.16);
+      // 上は明るいツヤ、ふち〜舌はアクセント色（控えめな二色グラデ）
+      fill.addColorStop(0, `hsla(${wrapHue(h + 12)},${sat - personality.milky * 16}%,${Math.min(97, light + 18 + milkBoost)}%,${Math.min(0.7, alpha + 0.04)})`);
+      fill.addColorStop(0.5, `hsla(${h},${sat + 4}%,${light + 2}%,${midA})`);
+      fill.addColorStop(1, `hsla(${wrapHue(ah)},${sat + 8}%,${light - 4}%,${edgeA})`);
     }
     ctx.fillStyle = fill;
     ctx.fill();
@@ -867,24 +870,24 @@
       ctx.fillRect(0, 0, W, H);
     }
 
-    // 立体感：本体の内側だけをふんわり丸く陰影づけ（ふち手前で透明に戻すので舌に線が出ない）
+    // 立体感：本体の内側だけをふんわり丸く陰影づけ（クールな影で濁らせない）
     const ish = ctx.createRadialGradient(
       cx + ox, cy + oy - R * 0.1, R * 0.45,
       cx + ox, cy + oy + R * 0.1, R * 1.02
     );
     ish.addColorStop(0, "hsla(0,0%,100%,0)");
     ish.addColorStop(0.62, "hsla(0,0%,100%,0)");
-    ish.addColorStop(0.86, `hsla(${wrapHue(ah - 10)},${sat + 8}%,${Math.max(34, light - 24)}%,0.28)`);
+    ish.addColorStop(0.86, `hsla(${wrapHue(h)},38%,${Math.max(50, light - 18)}%,0.22)`);
     ish.addColorStop(1, "hsla(0,0%,100%,0)");
     ctx.fillStyle = ish;
     ctx.fillRect(0, 0, W, H);
 
-    // 透過：底の内側に光が抜ける明るいにじみ（アクセント色でゼリーらしさ）
+    // 透過：底の内側に光が抜ける明るいにじみ（白っぽく澄んだ抜け）
     const cg = ctx.createRadialGradient(
-      cx + ox, cy + oy + R * 0.62, 0,
-      cx + ox, cy + oy + R * 0.62, R * 0.85
+      cx + ox, cy + oy + R * 0.6, 0,
+      cx + ox, cy + oy + R * 0.6, R * 0.8
     );
-    cg.addColorStop(0, `hsla(${wrapHue(ah + 8)},100%,90%,${0.42 + personality.glow * 0.2})`);
+    cg.addColorStop(0, `hsla(${wrapHue(h + 12)},85%,96%,${0.4 + personality.glow * 0.2})`);
     cg.addColorStop(1, "hsla(0,0%,100%,0)");
     ctx.fillStyle = cg;
     ctx.fillRect(0, 0, W, H);
@@ -959,7 +962,7 @@
       const py = cy + oy + Math.sin(s.a) * R * s.d * sy;
       const rad = s.rad * (0.6 + tw * 0.8);
       ctx.fillStyle = `hsla(${wrapHue(personality.hue + 40)},100%,95%,${0.4 + tw * 0.6})`;
-      if (star > 0.25) {
+      if (star > 0.4) {
         // きらきら：4方向にとがる光の粒
         const len = rad * (1.6 + star * 1.4);
         drawStar(px, py, len, rad * 0.5, s.tw * 0.3);
@@ -1164,7 +1167,7 @@
           squashV -= strong ? 0.15 : 0.06;
         }
         beatFlash = Math.max(beatFlash, strong ? 1 : 0.5);
-        if (strong && sparks.length < 60 && !finished) addSpark();
+        if (strong && sparks.length < 34 && !finished) addSpark();
         beatQ.splice(i, 1);
       }
     }
