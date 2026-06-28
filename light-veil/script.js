@@ -56,11 +56,17 @@ const MAX_PARTICLES = 1000;
 const pointers = {};
 let dragging = false;
 
-// ---- お絵描き（画面に直接なぞる・軌跡は残り、消すボタンでクリア） ----
+// ---- お絵描き（画面になぞる／顔が映れば顔に貼り付く・軌跡は残り、消すまで保持） ----
 let drawMode = false;
-let hasArt = false;
-const artC = document.createElement("canvas"); // 描いた光の軌跡を貯める層（消えない）
-const actx = artC.getContext("2d");
+const strokes = [];          // ベクター軌跡。各 { hue, pts:[ 固定{x,y} or 顔{n,ox,oy} ] }
+let curStroke = null;
+const STROKE_SP = 3;         // 点の間隔(px相当)
+const MAX_STROKE_PTS = 1400; // 端末保護
+let strokePts = 0;
+
+// ---- 顔メッシュ（描いた絵を顔に貼り付けるためのアンカー） ----
+let faceLandmarker = null, faceReady = false;
+let faceLM = null, faceEye = null, faceVert = null; // 今フレームの顔（画面座標）と軸
 
 // ===================================================================
 // 色つき発光スプライト（hue ごとに一度だけ生成してキャッシュ）
@@ -142,8 +148,6 @@ function resize() {
   BW = Math.max(1, W >> 2); BH = Math.max(1, H >> 2); // 1/4解像度ブルーム
   bloomC.width = BW; bloomC.height = BH;
   makeVignette();
-  artC.width = W; artC.height = H; // 注：回転時は描いた絵がクリアされます
-  hasArt = false;
 }
 window.addEventListener("resize", resize);
 window.addEventListener("orientationchange", () => setTimeout(resize, 250));
@@ -243,9 +247,9 @@ function render() {
   // --- 光を専用バッファへ（加算）。遠近投影：画面中心が消失点、zで拡大・収束 ---
   lcx.clearRect(0, 0, W, H);
   lcx.globalCompositeOperation = "lighter";
-  // 描いた軌跡（消えない層）を合成。ブルームに乗って光る
-  if (hasArt) { lcx.globalAlpha = 1; lcx.drawImage(artC, 0, 0); }
-  if (handOn) drawHandHints(lcx);
+  // 描いた軌跡（消えない・顔に貼り付く）。ブルームに乗って光る
+  drawStrokes(lcx);
+  if (handOn && !drawMode) drawHandHints(lcx);
   const VPx = W / 2, VPy = H / 2;
   for (let pass = 0; pass < 2; pass++) {
     const wantNear = pass === 1;
@@ -329,6 +333,50 @@ async function loadHands() {
     document.getElementById("hand").classList.remove("on");
     toast("手の認識は使えません。指で描けます");
   }
+}
+
+// 顔メッシュ（お絵描きを顔に貼り付ける用）
+async function loadFace() {
+  if (faceLandmarker) return;
+  try {
+    toast("顔の認識を準備中…");
+    const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14");
+    const { FaceLandmarker, FilesetResolver } = vision;
+    const fileset = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+    faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: {
+        modelAssetPath:
+          "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numFaces: 1
+    });
+    faceReady = true;
+    toast("顔をうつして、なぞると顔に描けます");
+  } catch (e) {
+    faceReady = false;
+    toast("顔の認識は使えません。画面に描けます");
+  }
+}
+
+// 顔の468点を画面座標へ。中央2軸（目の横・顔の縦）も用意
+function processFace(nowMs) {
+  faceLM = null; faceEye = null; faceVert = null;
+  if (!drawMode || !faceReady || !faceLandmarker || sourceMode !== "camera" || !camReady || !video.videoWidth) return;
+  if (video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  let res;
+  try { res = faceLandmarker.detectForVideo(video, nowMs); } catch (e) { return; }
+  if (!res || !res.faceLandmarks || !res.faceLandmarks.length) return;
+  const lm = res.faceLandmarks[0];
+  const L = new Array(lm.length);
+  for (let i = 0; i < lm.length; i++) L[i] = lmToScreen(lm[i].x, lm[i].y);
+  faceLM = L;
+  faceEye = { x: L[263].x - L[33].x, y: L[263].y - L[33].y };   // 目の横方向
+  faceVert = { x: L[152].x - L[10].x, y: L[152].y - L[10].y };  // 額→あごの縦方向
 }
 
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
@@ -554,35 +602,72 @@ function calm() {
 }
 
 // ===================================================================
-// お絵描き（光のペン）：画面をなぞると消えない軌跡が残る
+// お絵描き（光のペン）：画面をなぞると消えない軌跡。顔が映れば顔に貼り付く
 // ===================================================================
-function paintStroke(x0, y0, x1, y1, hue) {
-  const d = Math.hypot(x1 - x0, y1 - y0);
-  const brush = 11 * DPR;
-  const step = Math.max(2, brush * 0.34);
-  const n = Math.max(1, Math.ceil(d / step));
-  const g = getGlow(hue);
-  actx.globalCompositeOperation = "lighter";
-  for (let i = 0; i <= n; i++) {
-    const t = i / n;
-    const x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
-    actx.globalAlpha = 0.5;
-    actx.drawImage(g, x - brush, y - brush, brush * 2, brush * 2);
+// 描いた瞬間の顔メッシュに点を紐づける（一番近い顔の点＋顔の軸での相対位置）
+function anchorPoint(px, py) {
+  if (!faceLM || !faceEye || !faceVert) return null;
+  let best = -1, bd = Infinity;
+  for (let i = 0; i < faceLM.length; i++) {
+    const dx = faceLM[i].x - px, dy = faceLM[i].y - py, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = i; }
   }
-  actx.globalAlpha = 1;
-  hasArt = true;
+  const ex = faceEye.x, ey = faceEye.y, vx = faceVert.x, vy = faceVert.y;
+  const det = ex * vy - vx * ey;
+  if (Math.abs(det) < 1e-3) return null;
+  const bx = faceLM[best].x, by = faceLM[best].y;
+  const ox = ((px - bx) * vy - vx * (py - by)) / det;
+  const oy = (ex * (py - by) - (px - bx) * ey) / det;
+  return { n: best, ox, oy };
 }
-function paintDot(x, y, hue) {
-  const brush = 12 * DPR, g = getGlow(hue);
-  actx.globalCompositeOperation = "lighter";
-  actx.globalAlpha = 0.6;
-  actx.drawImage(g, x - brush, y - brush, brush * 2, brush * 2);
-  actx.globalAlpha = 1;
-  hasArt = true;
+// アンカーから今フレームの画面座標を復元（顔が無ければ null）
+function anchorScreen(p) {
+  if (p.n == null) return p; // 固定点
+  if (!faceLM || !faceEye || !faceVert || !faceLM[p.n]) return null;
+  const b = faceLM[p.n];
+  return { x: b.x + p.ox * faceEye.x + p.oy * faceVert.x, y: b.y + p.ox * faceEye.y + p.oy * faceVert.y };
 }
-function clearArt() {
-  actx.clearRect(0, 0, W, H);
-  hasArt = false;
+function addStrokePoint(px, py) {
+  if (!curStroke || strokePts >= MAX_STROKE_PTS) return;
+  const a = anchorPoint(px, py);
+  curStroke.pts.push(a ? a : { x: px, y: py });
+  strokePts++;
+}
+function clearArt() { strokes.length = 0; curStroke = null; strokePts = 0; }
+
+// 軌跡を毎フレーム描く（呼び出し側は加算合成。顔に貼り付いた点は今の顔位置で再構成）
+// なめらかなネオンの線：太い発光 + 細い明るい芯。ブルームでさらに光る
+function drawStrokes(g2) {
+  if (!strokes.length) return;
+  g2.lineCap = "round"; g2.lineJoin = "round";
+  for (const st of strokes) {
+    // 今フレームの画面座標に復元（顔が隠れた点で線を分割）
+    const segs = [];
+    let cur = [];
+    for (const pt of st.pts) {
+      const s = anchorScreen(pt);
+      if (!s) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+      cur.push(s);
+    }
+    if (cur.length) segs.push(cur);
+
+    for (let pass = 0; pass < 2; pass++) {
+      // pass0: 太い発光（色） / pass1: 細い芯（白め）
+      g2.strokeStyle = pass === 0 ? `hsla(${st.hue},95%,68%,0.32)` : `hsla(${st.hue},80%,92%,0.5)`;
+      g2.lineWidth = pass === 0 ? 13 * DPR : 3.2 * DPR;
+      for (const seg of segs) {
+        if (seg.length === 1) {
+          const r = (pass === 0 ? 7 : 2) * DPR;
+          g2.fillStyle = g2.strokeStyle;
+          g2.beginPath(); g2.arc(seg[0].x, seg[0].y, r, 0, TAU); g2.fill();
+          continue;
+        }
+        g2.beginPath(); g2.moveTo(seg[0].x, seg[0].y);
+        for (let i = 1; i < seg.length; i++) g2.lineTo(seg[i].x, seg[i].y);
+        g2.stroke();
+      }
+    }
+  }
 }
 
 // ===================================================================
@@ -590,10 +675,11 @@ function clearArt() {
 // ===================================================================
 function frame() {
   const liveCamera = sourceMode === "camera" && camReady && video.videoWidth;
-  const active = liveCamera || dragging || particles.length > 0 || hasArt;
+  const active = liveCamera || dragging || particles.length > 0 || strokes.length > 0;
   if (active) {
     paintBackground();
-    processHands(performance.now());
+    if (drawMode) processFace(performance.now());
+    else processHands(performance.now());
     update();
     render();
   }
@@ -611,7 +697,13 @@ stage.addEventListener("pointerdown", (e) => {
   e.preventDefault(); hideIntro(); Sound.kick();
   const pos = getPos(e), now = performance.now();
   const p = { x: pos.x, y: pos.y, lastT: now, startT: now, moved: 0 };
-  if (drawMode) { p.hue = themeHue(); paintDot(pos.x, pos.y, p.hue); Sound.chime(0.5); }
+  if (drawMode) {
+    curStroke = { hue: themeHue(), pts: [] };
+    strokes.push(curStroke);
+    p.addX = pos.x; p.addY = pos.y;
+    addStrokePoint(pos.x, pos.y);
+    Sound.chime(0.5);
+  }
   pointers[e.pointerId] = p;
   dragging = true;
   try { stage.setPointerCapture(e.pointerId); } catch (err) {}
@@ -624,9 +716,12 @@ stage.addEventListener("pointermove", (e) => {
   const pos = getPos(e);
   const mx = pos.x - p.x, my = pos.y - p.y, d = Math.hypot(mx, my);
   if (drawMode) {
-    // 画面をなぞって、消えない光の軌跡を描く
-    paintStroke(p.x, p.y, pos.x, pos.y, p.hue);
-    if (d > 6) Sound.chime(d / 14);
+    // 画面をなぞって、消えない光の軌跡を描く（間隔ごとに点を追加）
+    if (Math.hypot(pos.x - p.addX, pos.y - p.addY) >= STROKE_SP * DPR) {
+      addStrokePoint(pos.x, pos.y);
+      p.addX = pos.x; p.addY = pos.y;
+      if (d > 6) Sound.chime(d / 14);
+    }
   } else {
     const steps = Math.min(8, Math.floor(d / (6 * DPR)) + 1);
     for (let i = 0; i < steps; i++) {
@@ -646,7 +741,8 @@ function endPointer(e) {
   const p = pointers[e.pointerId];
   if (!p) return;
   e.preventDefault();
-  if (!drawMode && p.moved < 10 * DPR && performance.now() - p.startT < 320) { burst(p.x, p.y, 1); Sound.burst(); }
+  if (drawMode) curStroke = null;
+  else if (p.moved < 10 * DPR && performance.now() - p.startT < 320) { burst(p.x, p.y, 1); Sound.burst(); }
   delete pointers[e.pointerId];
   if (!Object.keys(pointers).length) dragging = false;
 }
@@ -667,7 +763,8 @@ function startCamera() {
     .then((stream) => { camStream = stream; video.srcObject = stream; return video.play(); })
     .then(() => {
       camReady = true; sourceMode = "camera"; setActive("source", "camera"); hideGate();
-      if (handOn && !handReady && !handLandmarker) loadHands();
+      if (drawMode) loadFace();
+      else if (handOn && !handReady && !handLandmarker) loadHands();
       else if (handOn && handReady) toast("手をかざしてみて");
     })
     .catch((err) => {
@@ -778,8 +875,18 @@ document.getElementById("draw").addEventListener("click", () => {
   drawMode = !drawMode;
   btn.classList.toggle("on", drawMode);
   btn.setAttribute("aria-pressed", drawMode ? "true" : "false");
-  if (drawMode) { Sound.kick(); hideIntro(); toast("画面をなぞって描く（消すボタンでクリア）"); }
-  else toast("お絵描き オフ");
+  if (drawMode) {
+    Sound.kick(); hideIntro();
+    // 顔に描けるよう顔メッシュを読み込み（カメラ時）。内カメラが自然
+    if (sourceMode === "camera") {
+      if (facing !== "user" && camReady) flipCamera();
+      if (camReady) loadFace();
+    }
+    toast("なぞって描く（顔をうつすと顔に貼り付く）");
+  } else {
+    faceLM = null;
+    toast("お絵描き オフ");
+  }
 });
 
 document.getElementById("reset").addEventListener("click", () => {
