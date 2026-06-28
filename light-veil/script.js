@@ -56,6 +56,13 @@ const MAX_PARTICLES = 1000;
 const pointers = {};
 let dragging = false;
 
+// ---- 星座づくり（ゆるい創作レイヤー・失敗なし） ----
+let constellationOn = false;
+let targets = [];      // 星（ノード）
+let links = [];        // つないだ線 [i, j]
+let lastLit = -1;      // 直前にともした星
+let constComplete = false, constTimer = 0;
+
 // ===================================================================
 // 色つき発光スプライト（hue ごとに一度だけ生成してキャッシュ）
 // ===================================================================
@@ -136,6 +143,7 @@ function resize() {
   BW = Math.max(1, W >> 2); BH = Math.max(1, H >> 2); // 1/4解像度ブルーム
   bloomC.width = BW; bloomC.height = BH;
   makeVignette();
+  if (constellationOn) spawnConstellation();
 }
 window.addEventListener("resize", resize);
 window.addEventListener("orientationchange", () => setTimeout(resize, 250));
@@ -269,6 +277,7 @@ function render() {
       }
     }
   }
+  if (constellationOn) drawConstellation(lcx);
   lcx.globalAlpha = 1; lcx.globalCompositeOperation = "source-over";
 
   // --- ブルーム：1/4解像度に縮小→拡大で柔らかく広がる発光 ---
@@ -544,14 +553,110 @@ function calm() {
 }
 
 // ===================================================================
+// 星座づくり
+// ===================================================================
+function spawnConstellation() {
+  targets = []; links = []; lastLit = -1; constComplete = false; constTimer = 0;
+  const n = 5 + (Math.random() * 3 | 0);
+  const mx = 60 * DPR, top = 130 * DPR, bottom = H - 230 * DPR;
+  let tries = 0;
+  while (targets.length < n && tries < 240) {
+    tries++;
+    const x = mx + Math.random() * (W - 2 * mx);
+    const y = top + Math.random() * Math.max(40 * DPR, bottom - top);
+    if (targets.every((t) => Math.hypot(t.x - x, t.y - y) > 95 * DPR))
+      targets.push({ x, y, lit: false, pulse: Math.random() * TAU });
+  }
+}
+
+// その瞬間「光が触れている点」（指先＋ポインタ）
+function getActivePoints() {
+  const pts = [];
+  for (const hnd of liveHands) for (const tp of hnd.tips) pts.push(tp);
+  for (const id in pointers) pts.push({ x: pointers[id].x, y: pointers[id].y });
+  return pts;
+}
+
+function updateConstellation(aps) {
+  if (!constellationOn) return;
+  if (!targets.length) spawnConstellation();
+  if (constComplete) {
+    if (--constTimer <= 0) spawnConstellation();
+    return;
+  }
+  const R = 44 * DPR;
+  for (let i = 0; i < targets.length; i++) {
+    const t = targets[i];
+    t.pulse += 0.05;
+    if (t.lit) continue;
+    for (const ap of aps) {
+      if (Math.hypot(ap.x - t.x, ap.y - t.y) < R) {
+        t.lit = true;
+        if (lastLit >= 0) links.push([lastLit, i]);
+        lastLit = i;
+        const litCount = targets.reduce((s, q) => s + (q.lit ? 1 : 0), 0);
+        bloomFrom({ x: t.x, y: t.y }, 30 * DPR);
+        Sound.constellationStep(litCount, targets.length);
+        break;
+      }
+    }
+  }
+  if (targets.every((t) => t.lit)) {
+    constComplete = true; constTimer = 130; // 完成 → ふわっと昇って消える
+    Sound.bloom();
+    // 線に沿って光を散らす
+    for (const [a, b] of links) {
+      const A = targets[a], B = targets[b];
+      for (let k = 0; k <= 6; k++) {
+        const t = k / 6;
+        addParticle(A.x + (B.x - A.x) * t, A.y + (B.y - A.y) * t, { vz: 0.05, size: (5 + Math.random() * 5) * DPR, decay: 0.012, flare: Math.random() < 0.3 });
+      }
+    }
+    toast("星座 かんせい！");
+  }
+}
+
+// 光バッファへ描く（呼び出し側が加算合成にしている前提）
+function drawConstellation(g2) {
+  if (!constellationOn || !targets.length) return;
+  const rise = constComplete ? (130 - constTimer) * 1.6 * DPR : 0;   // 完成後ふわっと上昇
+  const fade = constComplete ? Math.max(0, constTimer / 130) : 1;
+  const hue = theme === "gold" ? 46 : theme === "aurora" ? 210 : 165;
+  const g = getGlow(hue);
+  // つないだ線
+  g2.strokeStyle = `hsla(${hue},90%,78%,${0.5 * fade})`;
+  g2.lineWidth = 2 * DPR;
+  for (const [a, b] of links) {
+    const A = targets[a], B = targets[b];
+    g2.beginPath(); g2.moveTo(A.x, A.y - rise); g2.lineTo(B.x, B.y - rise); g2.stroke();
+  }
+  // 星
+  for (const t of targets) {
+    const y = t.y - rise;
+    if (t.lit) {
+      let s = 10 * DPR * (0.7 + 0.3 * fade); g2.globalAlpha = 0.9 * fade;
+      g2.drawImage(g, t.x - s, y - s, s * 2, s * 2);
+      const fr = 15 * DPR * fade; g2.globalAlpha = 0.45 * fade;
+      g2.drawImage(flareSprite, t.x - fr, y - fr, fr * 2, fr * 2);
+    } else {
+      const pulse = 0.5 + 0.5 * Math.sin(t.pulse);
+      const s = (5 + pulse * 3) * DPR; g2.globalAlpha = 0.22 + pulse * 0.22;
+      g2.drawImage(g, t.x - s, y - s, s * 2, s * 2);
+    }
+  }
+  g2.globalAlpha = 1;
+}
+
+// ===================================================================
 // メインループ
 // ===================================================================
 function frame() {
   const liveCamera = sourceMode === "camera" && camReady && video.videoWidth;
-  const active = liveCamera || dragging || particles.length > 0;
+  const active = liveCamera || dragging || particles.length > 0 || constellationOn;
   if (active) {
     paintBackground();
     processHands(performance.now());
+    if (constellationOn) updateConstellation(getActivePoints());
     update();
     render();
   }
@@ -723,7 +828,20 @@ soundBtn.addEventListener("click", () => {
   toast(on ? "音オン" : "音オフ");
 });
 
-document.getElementById("reset").addEventListener("click", () => { particles.length = 0; liveHands = []; toast("消しました"); });
+document.getElementById("constel").addEventListener("click", () => {
+  const btn = document.getElementById("constel");
+  constellationOn = !constellationOn;
+  btn.classList.toggle("on", constellationOn);
+  btn.setAttribute("aria-pressed", constellationOn ? "true" : "false");
+  if (constellationOn) { Sound.kick(); spawnConstellation(); hideIntro(); toast("星を指でつないで星座に"); }
+  else toast("星座づくり オフ");
+});
+
+document.getElementById("reset").addEventListener("click", () => {
+  particles.length = 0; liveHands = [];
+  if (constellationOn) spawnConstellation();
+  toast("消しました");
+});
 document.getElementById("save").addEventListener("click", () => {
   try {
     stage.toBlob((blob) => {
@@ -876,7 +994,13 @@ const Sound = (() => {
     calm() { voice(pal.root / 2, { type: "sine", dur: 1.8, gain: 0.10, attack: 0.12, wet: pal.wet + 0.2, voices: 2, sub: true, bright: 1300 }); voice(pal.root, { type: "sine", dur: 1.6, gain: 0.06, attack: 0.18, wet: pal.wet + 0.2, voices: 2, bright: 1600 }); },
     push() { voice(pal.root, { type: pal.type, dur: 1.0, gain: 0.12, glide: 2.0, attack: 0.03, wet: pal.wet + 0.2, voices: 3, sub: true, bright: 2400 }); },
     pull() { voice(pal.root * 2, { type: "sine", dur: 1.1, gain: 0.08, glide: 0.45, attack: 0.03, wet: pal.wet + 0.3, voices: 2, bright: 3600 }); },
-    star() { for (let i = 0; i < 4; i++) voice(pal.scale[i] * 2, { type: "triangle", dur: 0.9, gain: 0.06, attack: 0.004, wet: pal.wet + 0.2, voices: 2, bright: 5200, when: i * 0.08 }); }
+    star() { for (let i = 0; i < 4; i++) voice(pal.scale[i] * 2, { type: "triangle", dur: 0.9, gain: 0.06, attack: 0.004, wet: pal.wet + 0.2, voices: 2, bright: 5200, when: i * 0.08 }); },
+    // 星をともすたびに音階が上がる（つなぐほど旋律が育つ）
+    constellationStep(i, total) {
+      const sc = pal.scale, idx = Math.min(i - 1, sc.length - 1);
+      const f = sc[idx] * (i > sc.length ? 2 : 1);
+      voice(f, { type: pal.type, dur: 1.0, gain: 0.075, attack: 0.005, wet: pal.wet + 0.2, voices: 2, bright: 4800 });
+    }
   };
 })();
 
