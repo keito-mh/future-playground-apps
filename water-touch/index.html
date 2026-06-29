@@ -2,6 +2,15 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
+    <!--
+      セキュリティ堅牢化：このアプリは完全に自己完結（外部通信なし）。
+      自分のファイル以外の読み込み・スクリプト注入・外部送信をすべて禁止する。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
@@ -12,6 +21,10 @@
       content="指で画面をなぞると、水面が軌跡に沿ってスッとひらく。波紋・水しぶき・光の粒が広がる、触って気持ちいい水面体験。"
     />
     <meta name="theme-color" content="#06141f" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M12%203C8%207.5%206%2010.5%206%2013.2a6%206%200%200%200%2012%200C18%2010.5%2016%207.5%2012%203z'%20fill='%2364c8e8'/%3E%3C/svg%3E"
+    />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
