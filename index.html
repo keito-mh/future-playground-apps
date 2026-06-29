@@ -2,6 +2,16 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
+    <!-- 堅牢化：スクリプトは一切なし。外部読み込み・通信を禁止（装飾の都合でインラインCSSのみ許可）。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Ccircle%20cx='12'%20cy='12'%20r='9'%20fill='%23aa5cff'/%3E%3C/svg%3E"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Future Playground</title>
     <meta name="description" content="遊べるミニ体験コレクション。タップひとつで、ちょっと未来な遊び。" />
